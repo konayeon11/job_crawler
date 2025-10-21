@@ -1,0 +1,42 @@
+{
+  "토르티야": {
+    "quantity": "6장",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-10-27"
+  },
+  "할라피뇨": {
+    "quantity": "2개",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-11-03"
+  },
+  "라임": {
+    "quantity": "3개",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-11-03"
+  },
+  "옥수수": {
+    "quantity": "1그릇",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-10-25"
+  },
+  "아보카도": {
+    "quantity": "2개",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-10-23"
+  },
+  "살사 소스": {
+    "quantity": "1그릇",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-10-25"
+  },
+  "치즈": {
+    "quantity": "1조각",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-11-10"
+  },
+  "치폴레 소스": {
+    "quantity": "1병",
+    "added_date": "2025-10-20",
+    "expiry_date": "2025-11-19"
+  }
+}
