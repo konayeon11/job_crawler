@@ -1,0 +1,32 @@
+{
+  "order_id": "ORD-20251017-001",
+  "user_id": "younashin",
+  "order_date": "2025-10-17",
+  "store_name": "온라인 프레시마켓",
+  "items": [
+    {
+      "item_name": "유기농 무항생제 계란",
+      "quantity": "1판 (15구)"
+    },
+    {
+      "item_name": "저지방 우유",
+      "quantity": "1개 (900ml)"
+    },
+    {
+      "item_name": "국내산 삼겹살",
+      "quantity": "1팩 (600g)"
+    },
+    {
+      "item_name": "아보카도",
+      "quantity": "2개"
+    },
+    {
+      "item_name": "바나나",
+      "quantity": "1송이"
+    },
+    {
+      "item_name": "양파",
+      "quantity": "1망 (1.5kg)"
+    }
+  ]
+}
