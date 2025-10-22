@@ -1,0 +1,42 @@
+# docker-compose.yml
+
+services:
+  # 1. 백엔드 (Python/FastAPI)
+  backend:
+    build: .  # 최상위 폴더의 Dockerfile 사용
+    ports:
+      - "8000:8000" # 내 PC 8000번 -> 컨테이너 8000번
+    env_file:
+      # 이 파일(.env)이 프로젝트 최상위에 존재해야 합니다.
+      # (내용 예: OPENAI_API_KEY="sk-...")
+      - .env
+    volumes:
+      - .:/app    # (개발용) 코드 변경 시 컨테이너에 실시간 반영
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  # 2. 프론트엔드 (Vue/React...)
+  frontend:
+    build: ./frontend  # './frontend' 폴더의 Dockerfile 사용
+    ports:
+      - "3000:3000" # 내 PC 3000번 -> 컨테이너 3000번
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # 3. 데이터베이스 (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: my_nutritionist_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # DB 데이터 영구 저장
+    ports:
+      - "5432:5432" # (선택) 내 PC에서 DB로 직접 접속 시
+    restart: unless-stopped
+
+volumes:
+  postgres_data: # DB 데이터 저장을 위한 볼륨
