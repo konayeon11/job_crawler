@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>크롤링 분석 리포트</title>
+    <style>
+        body {font-family: Arial, sans-serif; margin: 20px;}
+        h1 {color: #333;}
+        table {border-collapse: collapse; width: 100%; margin: 20px 0;}
+        th, td {border: 1px solid #ddd; padding: 12px; text-align: left;}
+        th {background-color: #4CAF50; color: white;}
+        tr:nth-child(even) {background-color: #f2f2f2;}
+        .high {color: green; font-weight: bold;}
+        .medium {color: orange;}
+        .low {color: red;}
+    </style>
+</head>
+<body>
+    <h1>크롤링 결과 분석 리포트</h1>
+    <p>생성일: 2025-11-10 11:05:43</p>
+
+    <h2>전체 통계</h2>
+    <ul>
+        <li>총 공고: 16개</li>
+        <li>평균 추출률: 98.6%</li>
+        <li>최고 추출률: 100.0%</li>
+        <li>최저 추출률: 88.9%</li>
+    </ul>
+
+    <h2>도메인별 분석</h2>
+    <table>
+        <tr>
+            <th>도메인</th>
+            <th>공고 수</th>
+            <th>크롤링 방식</th>
+            <th>예상 시간</th>
+            <th>평균 추출률</th>
+        </tr>
+
+        <tr>
+            <td>careers.kakao.com</td>
+            <td>15</td>
+            <td>REST API 직접 호출</td>
+            <td>6초</td>
+            <td class="high">99.3%</td>
+        </tr>
+
+        <tr>
+            <td>recruit.navercorp.com</td>
+            <td>1</td>
+            <td>하이브리드 (Selenium + JSON-LD + 정규식)</td>
+            <td>30초</td>
+            <td class="medium">88.9%</td>
+        </tr>
+
+    </table>
+
+    <h2>필드별 추출률</h2>
+    <table>
+        <tr>
+            <th>필드</th>
+            <th>추출됨</th>
+            <th>전체</th>
+            <th>추출률</th>
+        </tr>
+
+        <tr>
+            <td>title</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+        <tr>
+            <td>company</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+        <tr>
+            <td>location</td>
+            <td>15</td>
+            <td>16</td>
+            <td class="high">93.8%</td>
+        </tr>
+
+        <tr>
+            <td>introduction</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+        <tr>
+            <td>work_content</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+        <tr>
+            <td>qualification</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+        <tr>
+            <td>work_condition</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+        <tr>
+            <td>recruitment_process</td>
+            <td>15</td>
+            <td>16</td>
+            <td class="high">93.8%</td>
+        </tr>
+
+        <tr>
+            <td>skills</td>
+            <td>16</td>
+            <td>16</td>
+            <td class="high">100.0%</td>
+        </tr>
+
+    </table>
+</body>
+</html>

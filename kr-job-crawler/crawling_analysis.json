@@ -1,0 +1,131 @@
+{
+  "total_jobs": 16,
+  "by_domain": {
+    "careers.kakao.com": {
+      "count": 15,
+      "method": "REST API 직접 호출",
+      "type": "API",
+      "estimated_time": 6,
+      "reliability": "100%",
+      "avg_extraction_rate": 99.3,
+      "description": "Kakao 공식 REST API 사용",
+      "pros": [
+        "빠름",
+        "신뢰도 높음",
+        "공식 API"
+      ],
+      "cons": [
+        "API 변경 가능성"
+      ]
+    },
+    "recruit.navercorp.com": {
+      "count": 1,
+      "method": "하이브리드 (Selenium + JSON-LD + 정규식)",
+      "type": "Hybrid",
+      "estimated_time": 30,
+      "reliability": "89%",
+      "avg_extraction_rate": 88.9,
+      "description": "Selenium 렌더링 + JSON-LD + 정규식 패턴",
+      "pros": [
+        "동적 콘텐츠 지원",
+        "상세 정보 추출",
+        "API 불필요"
+      ],
+      "cons": [
+        "느림",
+        "Selenium 의존성",
+        "메모리 사용 많음"
+      ]
+    }
+  },
+  "extraction_stats": {
+    "total_analyzed": 16,
+    "avg_rate": 98.6,
+    "min_rate": 88.9,
+    "max_rate": 100.0,
+    "details": [
+      {
+        "domain": "careers.kakao.com",
+        "title": "[2026 신입공채] Tech - Tech 공통",
+        "extracted": 8,
+        "total": 9,
+        "rate": 88.88888888888889
+      },
+      {
+        "domain": "careers.kakao.com",
+        "title": "Data Engineer (경력)",
+        "extracted": 9,
+        "total": 9,
+        "rate": 100.0
+      },
+      {
+        "domain": "careers.kakao.com",
+        "title": "추천 시스템 연구/개발 (경력)",
+        "extracted": 9,
+        "total": 9,
+        "rate": 100.0
+      },
+      {
+        "domain": "careers.kakao.com",
+        "title": "추천 시스템 데이터 엔지니어 (경력)",
+        "extracted": 9,
+        "total": 9,
+        "rate": 100.0
+      },
+      {
+        "domain": "careers.kakao.com",
+        "title": "Machine Learning Engineer (Search/ML/LLM) (신입)",
+        "extracted": 9,
+        "total": 9,
+        "rate": 100.0
+      }
+    ]
+  },
+  "field_stats": {
+    "title": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    },
+    "company": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    },
+    "location": {
+      "extracted": 15,
+      "total": 16,
+      "rate": 93.8
+    },
+    "introduction": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    },
+    "work_content": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    },
+    "qualification": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    },
+    "work_condition": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    },
+    "recruitment_process": {
+      "extracted": 15,
+      "total": 16,
+      "rate": 93.8
+    },
+    "skills": {
+      "extracted": 16,
+      "total": 16,
+      "rate": 100.0
+    }
+  }
+}
