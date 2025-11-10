@@ -1,0 +1,29 @@
+domain: careers.example.com
+name: Example Company Careers
+version: "1.0.0"
+pattern: static_toggle
+
+it_filter:
+  selector: "button:has-text('IT')"
+  route: null
+  api_params: null
+
+selectors:
+  container: "main.job-list"
+  job_item: "article.job-posting"
+  title: "h2.job-title"
+  company: ".company-name"
+  location: ".location"
+  employment_type: ".job-type"
+  post_date: "time.posted"
+
+api_config: null
+
+extraction_rules:
+  date_format: "%Y-%m-%d"
+  location_country_default: "KR"
+
+last_verified: "2025-11-07T10:00:00+09:00"
+notes: |
+  이 사이트는 정적 토글 버튼으로 IT 직군을 필터링합니다.
+  버튼 클릭 시 DOM이 즉시 변경되며, 무한 스크롤을 지원합니다.
