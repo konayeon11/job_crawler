@@ -73,9 +73,10 @@ class CoupangJobCrawler:
 
         # 위치 필터를 포함한 base URL 설정
         if location:
-            # URL 인코딩 처리 (공백을 %20으로 변환)
-            location_encoded = location.replace(' ', '%20')
-            self.base_url = f"https://www.coupang.jobs/kr/jobs/?location={location_encoded}&pagesize=20"
+            # URL 인코딩 처리 (공백을 %20으로 변환, +로 표현된 공백도 처리)
+            location_encoded = location.replace(' ', '%20').replace('+', '%2B')
+            # search 파라미터도 포함하여 쿠팡 형식에 맞추기
+            self.base_url = f"https://www.coupang.jobs/kr/jobs/?search=&location={location_encoded}&pagesize=20"
         else:
             self.base_url = "https://www.coupang.jobs/kr/jobs/"
 
