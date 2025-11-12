@@ -397,6 +397,9 @@ class CoupangJobCrawler:
                         job_data['content'] = body.get_text(separator='\n', strip=True)
                         print(f"  ✅ body 요소에서 본문 크롤링 ({len(job_data['content'])} 글자)")
 
+            # HTML에서 직접 날짜 정보 크롤링
+            self._extract_dates_from_html(soup, job_data)
+
             # 메타 정보 추출
             self._extract_metadata(soup, job_data)
 
@@ -412,6 +415,124 @@ class CoupangJobCrawler:
             print(f"  ❌ 크롤링 실패: {str(e)}")
 
         return job_data
+
+    def _extract_dates_from_html(self, soup: BeautifulSoup, job_data: Dict):
+        """
+        HTML과 content에서 공고 시작일과 마감일을 크롤링
+        content 내용에서 날짜 정보 추출
+        """
+        try:
+            # HTML 메타데이터 확인
+            all_text = soup.get_text()
+
+            # 패턴 정의
+            date_patterns = {
+                'posting_date': [
+                    r'공고게시일[:\s]+(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})',
+                    r'공고게시일[:\s]+(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)',
+                    r'Posted[:\s]+([A-Za-z]+\s+\d{1,2},\s*\d{4})',
+                ],
+                'closing_date': [
+                    r'마감일[:\s]+(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})',
+                    r'마감일[:\s]+(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)',
+                    r'접수마감[:\s]+(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})',
+                    r'접수마감[:\s]+(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)',
+                    r'Deadline[:\s]+([A-Za-z]+\s+\d{1,2},\s*\d{4})',
+                    r'마감[:\s]+(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})',
+                    r'~\s*(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})',  # ~로 표시된 마감일
+                ],
+            }
+
+            for date_field, patterns in date_patterns.items():
+                if not job_data[date_field]:
+                    for pattern in patterns:
+                        match = re.search(pattern, all_text)
+                        if match:
+                            date_value = match.group(1).strip()
+                            date_value = self._normalize_date_format(date_value)
+                            if date_value:
+                                job_data[date_field] = date_value
+                            break
+
+            # content에서도 날짜 찾기 (2번 호출되는 것 방지하기 위해 content 확인)
+            if job_data['content']:
+                self._extract_dates_from_content(job_data)
+
+        except Exception as e:
+            # 날짜 추출 실패는 무시
+            pass
+
+    def _extract_dates_from_content(self, job_data: Dict):
+        """
+        content 텍스트에서 채용 일정과 마감일 추출
+        """
+        if not job_data['content']:
+            return
+
+        content = job_data['content']
+
+        # 공고게시일/마감일 추출
+        posting_patterns = [
+            r'공고게시일[:\s]*\n*([^\n]+)',
+            r'공고게시[:\s]*\n*([^\n]+)',
+        ]
+
+        closing_patterns = [
+            r'마감일[:\s]*\n*([^\n]+)',
+            r'접수마감[:\s]*\n*([^\n]+)',
+            r'채용\s*일정.*?(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})',
+        ]
+
+        # 공고게시일 추출
+        if not job_data['posting_date']:
+            for pattern in posting_patterns:
+                match = re.search(pattern, content)
+                if match:
+                    text = match.group(1).strip()
+                    # 텍스트에서 날짜 추출
+                    date_match = re.search(r'\d{4}[.\-]\d{1,2}[.\-]\d{1,2}|\d{4}년\s*\d{1,2}월\s*\d{1,2}일', text)
+                    if date_match:
+                        date_value = self._normalize_date_format(date_match.group(0))
+                        if date_value:
+                            job_data['posting_date'] = date_value
+                        break
+
+        # 마감일 추출
+        if not job_data['closing_date']:
+            for pattern in closing_patterns:
+                match = re.search(pattern, content, re.DOTALL)
+                if match:
+                    text = match.group(1).strip() if match.lastindex >= 1 else match.group(0)
+                    date_match = re.search(r'\d{4}[.\-]\d{1,2}[.\-]\d{1,2}|\d{4}년\s*\d{1,2}월\s*\d{1,2}일', text)
+                    if date_match:
+                        date_value = self._normalize_date_format(date_match.group(0))
+                        if date_value:
+                            job_data['closing_date'] = date_value
+                        break
+
+    def _normalize_date_format(self, date_str: str) -> str:
+        """
+        다양한 날짜 형식을 YYYY-MM-DD로 통일
+        """
+        # 도트 형식: 2024.11.30 → 2024-11-30
+        date_str = date_str.replace('.', '-')
+
+        # 한글 년월일 형식: 2024년 11월 30일 → 2024-11-30
+        if '년' in date_str and '월' in date_str and '일' in date_str:
+            date_str = re.sub(r'(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일', r'\1-\2-\3', date_str)
+
+        # 패딩 추가: 2024-1-5 → 2024-01-05
+        parts = date_str.split('-')
+        if len(parts) == 3:
+            try:
+                year = parts[0]
+                month = parts[1].zfill(2)
+                day = parts[2].zfill(2)
+                return f"{year}-{month}-{day}"
+            except:
+                return date_str
+
+        return date_str
 
     def _extract_metadata(self, soup: BeautifulSoup, job_data: Dict):
         """
@@ -530,36 +651,61 @@ class CoupangJobCrawler:
         content = job_data['content']
 
         # 섹션 정의 (키워드와 대응하는 필드)
+        # \s*를 사용하여 공백 유무에 관계없이 매칭
         section_patterns = {
             'company_description': [
-                r'(?:회사소개|기업소개|쿠팡\s*소개|Company\s*(?:Info|Description|Overview))',
+                r'회사\s*소개',
+                r'기업\s*소개',
+                r'쿠팡\s*소개',
+                r'Company\s+(?:Info|Description|Overview|Introduction)',
             ],
             'team_description': [
-                r'(?:조직소개|팀소개|팀\s*정보|Team\s*(?:Info|Description|Overview)|조직\s*문화)',
+                r'조직\s*소개',
+                r'팀\s*소개',
+                r'팀\s*정보',
+                r'조직\s*문화',
+                r'Team\s+(?:Info|Description|Overview|Introduction)',
             ],
             'job_description': [
-                r'(?:업무\s*내용|주요\s*업무|담당\s*업무|Job\s*Description|Responsibilities)',
+                r'직무\s*소개',
+                r'업무\s*내용',
+                r'주요\s*업무',
+                r'담당\s*업무',
+                r'Job\s+(?:Description|Overview)',
+                r'Responsibilities',
             ],
             'required_qualifications': [
-                r'(?:필수\s*(?:조건|자격|요건)|Required\s*(?:Qualifications|Skills|Requirements))',
+                r'필수\s*(?:조건|자격|요건)',
+                r'Required\s+(?:Qualifications|Skills|Requirements)',
             ],
             'preferred_qualifications': [
-                r'(?:우대\s*(?:사항|조건|요건)|Preferred\s*(?:Qualifications|Skills|Requirements))',
+                r'우대\s*(?:사항|조건|요건)',
+                r'Preferred\s+(?:Qualifications|Skills|Requirements)',
             ],
             'recruitment_schedule': [
-                r'(?:채용\s*(?:일정|스케줄)|Recruitment\s*Schedule|채용\s*기간)',
+                r'채용\s*(?:일정|스케줄|기간)',
+                r'Recruitment\s+Schedule',
             ],
             'selection_process': [
-                r'(?:전형\s*절차|선발\s*절차|Selection\s*Process|면접)',
+                r'전형\s*절차',
+                r'선발\s*절차',
+                r'Selection\s+Process',
+                r'면접',
             ],
             'notes': [
-                r'(?:참고\s*사항|주의\s*사항|Important\s*Notes|안내\s*사항)',
+                r'참고\s*사항',
+                r'주의\s*사항',
+                r'Important\s+Notes',
+                r'안내\s*사항',
             ],
             'privacy_policy': [
-                r'(?:개인정보\s*처리방침|Privacy\s*Policy|개인정보\s*보호)',
+                r'개인정보\s*처리방침',
+                r'Privacy\s+Policy',
+                r'개인정보\s*보호',
             ],
             'document_return_policy': [
-                r'(?:서류\s*반환\s*정책|Document\s*Return|서류\s*반환)',
+                r'서류\s*반환',
+                r'Document\s+Return',
             ],
         }
 
@@ -569,7 +715,7 @@ class CoupangJobCrawler:
                 continue
 
             for pattern in patterns:
-                # 섹션 시작 위치 찾기
+                # 섹션 시작 위치 찾기 (공백 무시)
                 match = re.search(pattern, content, re.IGNORECASE)
                 if not match:
                     continue
@@ -585,6 +731,10 @@ class CoupangJobCrawler:
                 for i, line in enumerate(lines[1:], 1):
                     line = line.strip()
 
+                    # 빈 줄은 스킵
+                    if not line:
+                        continue
+
                     # 다른 섹션 키워드가 나오면 중단
                     is_next_section = False
                     for other_patterns in section_patterns.values():
@@ -598,12 +748,11 @@ class CoupangJobCrawler:
                     if is_next_section:
                         break
 
-                    if line:
-                        section_text += line + '\n'
+                    section_text += line + '\n'
 
-                    # 최대 1000자까지만 추출
-                    if len(section_text) > 1000:
-                        section_text = section_text[:1000].rsplit('\n', 1)[0]
+                    # 최대 2000자까지 추출
+                    if len(section_text) > 2000:
+                        section_text = section_text[:2000].rsplit('\n', 1)[0]
                         break
 
                 if section_text.strip():
