@@ -166,6 +166,27 @@ class CoupangJobCrawler:
 
         return False
 
+    def _is_contract_position(self, title: str, employment_type: str) -> bool:
+        """
+        채용공고가 계약직인지 판단
+
+        Args:
+            title: 공고 제목
+            employment_type: 고용형태
+
+        Returns:
+            계약직 여부
+        """
+        contract_keywords = ['계약직', 'contract', '계약', '임시직', 'temporary']
+
+        combined_text = (title + ' ' + employment_type).lower()
+
+        for keyword in contract_keywords:
+            if keyword.lower() in combined_text:
+                return True
+
+        return False
+
     def _find_max_page(self) -> int:
         """
         마지막 페이지 번호를 이진 탐색으로 찾음
@@ -332,10 +353,16 @@ class CoupangJobCrawler:
             'closing_date': '',
             'location': '',
             'employment_type': '',
+            'company_description': '',
+            'team_description': '',
+            'job_description': '',
             'required_qualifications': '',
             'preferred_qualifications': '',
-            'job_description': '',
-            'company_description': '',
+            'recruitment_schedule': '',
+            'selection_process': '',
+            'notes': '',
+            'privacy_policy': '',
+            'document_return_policy': '',
             'content': '',
             'crawled_at': datetime.now().isoformat(),
         }
@@ -372,6 +399,9 @@ class CoupangJobCrawler:
 
             # 메타 정보 추출
             self._extract_metadata(soup, job_data)
+
+            # 섹션별 파싱
+            self._parse_job_sections(job_data)
 
             if job_data['title']:
                 print(f"  ✅ 공고 제목: {job_data['title'][:60]}...")
@@ -490,6 +520,96 @@ class CoupangJobCrawler:
             # 메타데이터 추출 실패는 무시
             pass
 
+    def _parse_job_sections(self, job_data: Dict):
+        """
+        content에서 각 섹션별로 텍스트를 파싱하여 해당 필드에 저장
+        """
+        if not job_data['content']:
+            return
+
+        content = job_data['content']
+
+        # 섹션 정의 (키워드와 대응하는 필드)
+        section_patterns = {
+            'company_description': [
+                r'(?:회사소개|기업소개|쿠팡\s*소개|Company\s*(?:Info|Description|Overview))',
+            ],
+            'team_description': [
+                r'(?:조직소개|팀소개|팀\s*정보|Team\s*(?:Info|Description|Overview)|조직\s*문화)',
+            ],
+            'job_description': [
+                r'(?:업무\s*내용|주요\s*업무|담당\s*업무|Job\s*Description|Responsibilities)',
+            ],
+            'required_qualifications': [
+                r'(?:필수\s*(?:조건|자격|요건)|Required\s*(?:Qualifications|Skills|Requirements))',
+            ],
+            'preferred_qualifications': [
+                r'(?:우대\s*(?:사항|조건|요건)|Preferred\s*(?:Qualifications|Skills|Requirements))',
+            ],
+            'recruitment_schedule': [
+                r'(?:채용\s*(?:일정|스케줄)|Recruitment\s*Schedule|채용\s*기간)',
+            ],
+            'selection_process': [
+                r'(?:전형\s*절차|선발\s*절차|Selection\s*Process|면접)',
+            ],
+            'notes': [
+                r'(?:참고\s*사항|주의\s*사항|Important\s*Notes|안내\s*사항)',
+            ],
+            'privacy_policy': [
+                r'(?:개인정보\s*처리방침|Privacy\s*Policy|개인정보\s*보호)',
+            ],
+            'document_return_policy': [
+                r'(?:서류\s*반환\s*정책|Document\s*Return|서류\s*반환)',
+            ],
+        }
+
+        # 각 섹션에 대해 텍스트 추출
+        for field, patterns in section_patterns.items():
+            if job_data[field]:  # 이미 추출된 경우 건너뛰기
+                continue
+
+            for pattern in patterns:
+                # 섹션 시작 위치 찾기
+                match = re.search(pattern, content, re.IGNORECASE)
+                if not match:
+                    continue
+
+                start_pos = match.start()
+                section_text = ""
+
+                # 다음 섹션까지의 텍스트 추출
+                remaining_text = content[start_pos:]
+                lines = remaining_text.split('\n')
+
+                # 첫 번째 줄은 헤더이므로 스킵
+                for i, line in enumerate(lines[1:], 1):
+                    line = line.strip()
+
+                    # 다른 섹션 키워드가 나오면 중단
+                    is_next_section = False
+                    for other_patterns in section_patterns.values():
+                        for other_pattern in other_patterns:
+                            if re.search(other_pattern, line, re.IGNORECASE):
+                                is_next_section = True
+                                break
+                        if is_next_section:
+                            break
+
+                    if is_next_section:
+                        break
+
+                    if line:
+                        section_text += line + '\n'
+
+                    # 최대 1000자까지만 추출
+                    if len(section_text) > 1000:
+                        section_text = section_text[:1000].rsplit('\n', 1)[0]
+                        break
+
+                if section_text.strip():
+                    job_data[field] = section_text.strip()
+                    break
+
     def parse_with_claude(self, job_data: Dict, api_key: str) -> Dict:
         """
         Claude API를 사용하여 텍스트에서 구조화된 정보 추출
@@ -593,6 +713,13 @@ class CoupangJobCrawler:
                 print(f"\n⏳ [{idx}/{len(job_links)}] 크롤링 중...")
 
                 job_data = self.extract_job_details(url)
+
+                # 계약직 필터링 (제외)
+                if self._is_contract_position(job_data['title'], job_data['employment_type']):
+                    print(f"  ⏭️  계약직 - 건너뜀")
+                    fail_count += 1
+                    time.sleep(self.delay * 0.5)  # 짧은 대기
+                    continue
 
                 # 한국 채용 필터링
                 if korea_only:
