@@ -49,6 +49,8 @@ python coupang_crawler.py
 | `-o`, `--output` | JSON 출력 파일 경로 | `coupang_jobs.json` |
 | `--max` | 최대 수집 개수 | 제한 없음 |
 | `--delay` | 요청 간 대기시간 (초) | `2.0` |
+| `--location` | 위치 필터 (서버 필터링, 페이지네이션 지원) | 없음 |
+| `--korea` | 한국 채용만 수집 (클라이언트 필터링) | 비활성화 |
 | `--ai` | Claude API 파싱 활성화 | - |
 | `--api-key` | Anthropic API 키 | - |
 
@@ -60,35 +62,54 @@ python coupang_crawler.py
 python coupang_crawler.py
 ```
 
-#### 2. 최대 10개만 수집
+#### 2. South Korea 위치 필터로 모든 공고 수집 (서버 필터링, 권장)
 
 ```bash
-python coupang_crawler.py --max 10
+python coupang_crawler.py --location "South Korea"
 ```
 
-#### 3. 브라우저에 보이지 않게 빠르게 크롤링 (5개, 1초 대기)
+#### 3. 다른 위치로 필터링 (예: Seoul, Busan)
 
 ```bash
-python coupang_crawler.py --max 5 --delay 1
+python coupang_crawler.py --location Seoul
+python coupang_crawler.py --location Busan
 ```
 
-#### 4. 커스텀 출력 파일
+#### 4. 한국 채용만 수집 (클라이언트 필터링, 모든 페이지 크롤링)
 
 ```bash
-python coupang_crawler.py -o results/jobs.json
+python coupang_crawler.py --korea
 ```
 
-#### 5. Claude API를 사용한 지능형 파싱
+#### 5. 위치 필터 + 최대 개수 제한
 
 ```bash
-python coupang_crawler.py --ai --api-key your-api-key
+python coupang_crawler.py --location "South Korea" --max 30
+```
+
+#### 6. 빠르게 크롤링 (대기시간 감소)
+
+```bash
+python coupang_crawler.py --location "South Korea" --delay 1
+```
+
+#### 7. 커스텀 출력 파일
+
+```bash
+python coupang_crawler.py --location "South Korea" -o results/korea_jobs.json
+```
+
+#### 8. Claude API를 사용한 지능형 파싱
+
+```bash
+python coupang_crawler.py --location "South Korea" --ai --api-key your-api-key
 ```
 
 또는 환경변수 설정:
 
 ```bash
 export ANTHROPIC_API_KEY=your-api-key
-python coupang_crawler.py --ai
+python coupang_crawler.py --location "South Korea" --ai
 ```
 
 ## 출력 데이터 구조
@@ -114,7 +135,20 @@ python coupang_crawler.py --ai
 
 ### 정렬 순서
 
-출력되는 JSON 배열은 **최신 크롤링 순서로 정렬**되어 있습니다. 즉, `--korea` 옵션으로 한국 채용을 크롤링할 때 최신으로 발견된 공고가 배열의 첫 번째에 위치합니다.
+출력되는 JSON 배열은 **최신 크롤링 순서로 정렬**되어 있습니다. 즉, 가장 최신으로 발견된 공고가 배열의 첫 번째에 위치합니다.
+
+### 페이지네이션
+
+`--location` 옵션 사용 시 **자동으로 모든 페이지를 크롤링**합니다:
+
+- 예: `--location "South Korea"`는 South Korea 위치의 모든 공고를 수집 (약 29개, 2페이지)
+- 내부적으로 이진 탐색을 사용하여 마지막 페이지를 자동으로 탐지
+- 각 페이지를 순차적으로 크롤링하여 모든 공고를 수집
+
+**--korea 옵션 사용 시:**
+- 메인 페이지(페이지 1)에서 공고를 수집한 후
+- 클라이언트 필터링으로 한국 공고만 추출
+- 페이지네이션을 지원하지 않음
 
 ## 기술 스택
 

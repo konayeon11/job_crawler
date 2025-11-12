@@ -34,14 +34,16 @@ except ImportError:
 class CoupangJobCrawler:
     """쿠팡 채용공고 크롤러"""
 
-    def __init__(self, delay: float = 2.0, max_retries: int = 3):
+    def __init__(self, delay: float = 2.0, max_retries: int = 3, location: Optional[str] = None):
         """
         Args:
             delay: 페이지 요청 간 대기 시간 (초)
             max_retries: 최대 재시도 횟수
+            location: 위치 필터 (예: "South Korea", "Seoul")
         """
         self.delay = delay
         self.max_retries = max_retries
+        self.location = location
 
         # CloudScraper 또는 일반 requests 세션 사용
         if HAS_CLOUDSCRAPER:
@@ -68,7 +70,14 @@ class CoupangJobCrawler:
             'Sec-Fetch-Site': 'none',
             'Cache-Control': 'max-age=0',
         })
-        self.base_url = "https://www.coupang.jobs/kr/jobs/"
+
+        # 위치 필터를 포함한 base URL 설정
+        if location:
+            # URL 인코딩 처리 (공백을 %20으로 변환)
+            location_encoded = location.replace(' ', '%20')
+            self.base_url = f"https://www.coupang.jobs/kr/jobs/?location={location_encoded}&pagesize=20"
+        else:
+            self.base_url = "https://www.coupang.jobs/kr/jobs/"
 
     def _make_request(self, url: str, timeout: int = 15) -> Optional[requests.Response]:
         """
@@ -157,39 +166,121 @@ class CoupangJobCrawler:
 
         return False
 
+    def _find_max_page(self) -> int:
+        """
+        마지막 페이지 번호를 이진 탐색으로 찾음
+
+        Returns:
+            마지막 페이지 번호
+        """
+        low, high = 1, 100
+        last_valid = 1
+
+        while low <= high:
+            mid = (low + high) // 2
+
+            # mid 페이지 확인
+            if self.location:
+                test_url = f"{self.base_url}&page={mid}"
+            else:
+                test_url = f"{self.base_url}?page={mid}"
+
+            response = self._make_request(test_url)
+            if response:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                jobs = len(soup.find_all('a', href=lambda x: x and 'gh_jid=' in str(x)))
+
+                if jobs > 0:
+                    last_valid = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            else:
+                high = mid - 1
+
+        return last_valid
+
     def get_job_links(self, max_jobs: Optional[int] = None, korea_only: bool = False) -> List[str]:
         """
-        채용공고 링크 수집
+        채용공고 링크 수집 (모든 페이지에서)
 
         Args:
             max_jobs: 최대 수집 개수
-            korea_only: 한국 채용만 수집 여부
+            korea_only: 한국 채용만 수집 여부 (location 필터 사용 시 무시됨)
 
         Returns:
             채용공고 링크 리스트
         """
         print(f"📄 채용공고 목록 페이지 접속: {self.base_url}")
 
-        response = self._make_request(self.base_url)
-        if not response:
-            print(f"  ❌ 페이지 접속 실패")
-            return []
-
         try:
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            # 채용공고 링크 수집
             job_links = []
             seen_urls = set()
 
-            # 다양한 선택자로 공고 링크 찾기
-            selectors = [
-                'a[href*="/jobs/"]',  # /jobs/ 패턴이 있는 모든 링크
-            ]
+            # location 필터가 설정된 경우 모든 페이지 크롤링
+            if self.location:
+                print(f"📍 위치 필터: {self.location}")
 
-            for selector in selectors:
-                elements = soup.select(selector)
-                print(f"  🔍 선택자 '{selector}'에서 {len(elements)}개 요소 발견")
+                # 최대 페이지 찾기
+                max_page = self._find_max_page()
+                print(f"✅ 최대 페이지: {max_page}개 발견")
+
+                # 모든 페이지 크롤링
+                for page_num in range(1, max_page + 1):
+                    if max_jobs and len(job_links) >= max_jobs:
+                        break
+
+                    page_url = f"{self.base_url}&page={page_num}" if page_num > 1 else self.base_url
+                    response = self._make_request(page_url)
+
+                    if not response:
+                        print(f"  ⚠️  페이지 {page_num} 접속 실패")
+                        continue
+
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    elements = soup.select('a[href*="/jobs/"]')
+
+                    page_jobs = 0
+                    for element in elements:
+                        href = element.get('href', '').strip()
+
+                        if not href:
+                            continue
+
+                        # 절대 URL로 변환
+                        if href.startswith('/'):
+                            href = urljoin(self.base_url, href)
+                        elif not href.startswith('http'):
+                            href = urljoin(self.base_url, href)
+
+                        # URL 필터링
+                        has_job_id = 'gh_jid=' in href or re.search(r'/jobs/\d+', href)
+
+                        if (href and '/jobs/' in href
+                            and href not in seen_urls
+                            and has_job_id
+                            and 'saved' not in href.lower()):
+
+                            job_links.append(href)
+                            seen_urls.add(href)
+                            page_jobs += 1
+
+                            if max_jobs and len(job_links) >= max_jobs:
+                                break
+
+                    print(f"  📄 페이지 {page_num}: {page_jobs}개 공고 수집")
+                    time.sleep(self.delay)
+
+            else:
+                # location 필터가 없는 경우 (원래 방식)
+                response = self._make_request(self.base_url)
+                if not response:
+                    print(f"  ❌ 페이지 접속 실패")
+                    return []
+
+                soup = BeautifulSoup(response.content, 'html.parser')
+                elements = soup.select('a[href*="/jobs/"]')
+                print(f"  🔍 선택자에서 {len(elements)}개 요소 발견")
 
                 for element in elements:
                     href = element.get('href', '').strip()
@@ -203,8 +294,7 @@ class CoupangJobCrawler:
                     elif not href.startswith('http'):
                         href = urljoin(self.base_url, href)
 
-                    # URL 필터링 (실제 공고 페이지만)
-                    # 페이지네이션 링크 제외 (gh_jid 또는 공고 ID가 있어야 함)
+                    # URL 필터링
                     has_job_id = 'gh_jid=' in href or re.search(r'/jobs/\d+', href)
 
                     if (href and '/jobs/' in href
@@ -219,11 +309,8 @@ class CoupangJobCrawler:
                         job_links.append(href)
                         seen_urls.add(href)
 
-                        if max_jobs and len(job_links) >= max_jobs * 5:  # 충분히 많이 수집
+                        if max_jobs and len(job_links) >= max_jobs * 5:
                             break
-
-                if max_jobs and len(job_links) >= max_jobs * 5:
-                    break
 
             # 중복 제거
             job_links = list(dict.fromkeys(job_links))
@@ -634,7 +721,13 @@ def main():
     parser.add_argument(
         '--korea',
         action='store_true',
-        help='한국 채용만 수집'
+        help='한국 채용만 수집 (location 필터 없이 클라이언트 필터링)'
+    )
+
+    parser.add_argument(
+        '--location',
+        default=None,
+        help='위치 필터 (예: "South Korea", "Seoul") - 서버 필터링 사용'
     )
 
     args = parser.parse_args()
@@ -657,10 +750,12 @@ def main():
     else:
         print(f"📊 최대 수집 개수: 제한 없음")
     print(f"🤖 Claude API 파싱: {'활성화' if args.ai else '비활성화'}")
+    if args.location:
+        print(f"📍 위치 필터: {args.location}")
     print(f"🇰🇷 한국 채용만: {'활성화' if args.korea else '비활성화'}")
     print("=" * 70 + "\n")
 
-    crawler = CoupangJobCrawler(delay=args.delay)
+    crawler = CoupangJobCrawler(delay=args.delay, location=args.location)
 
     crawler.crawl(
         output_file=args.output,
