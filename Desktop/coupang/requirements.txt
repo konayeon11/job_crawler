@@ -1,0 +1,4 @@
+requests==2.31.0
+beautifulsoup4==4.12.2
+cloudscraper==1.2.71
+anthropic==0.39.0
