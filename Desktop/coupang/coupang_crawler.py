@@ -557,7 +557,7 @@ class CoupangJobCrawler:
         return job_data
 
     def crawl(self,
-              output_file: str = "coupang_jobs.json",
+              output_file: str = "coupang.json",
               use_ai: bool = False,
               api_key: Optional[str] = None,
               korea_only: bool = False) -> List[Dict]:
@@ -673,8 +673,8 @@ def main():
 
     parser.add_argument(
         '-o', '--output',
-        default='coupang_jobs.json',
-        help='JSON 출력 파일 경로 (기본: coupang_jobs.json)'
+        default='coupang.json',
+        help='JSON 출력 파일 경로 (기본: coupang.json)'
     )
 
     parser.add_argument(
