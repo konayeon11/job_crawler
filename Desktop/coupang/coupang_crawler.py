@@ -200,12 +200,11 @@ class CoupangJobCrawler:
 
         return last_valid
 
-    def get_job_links(self, max_jobs: Optional[int] = None, korea_only: bool = False) -> List[str]:
+    def get_job_links(self, korea_only: bool = False) -> List[str]:
         """
         채용공고 링크 수집 (모든 페이지에서)
 
         Args:
-            max_jobs: 최대 수집 개수
             korea_only: 한국 채용만 수집 여부 (location 필터 사용 시 무시됨)
 
         Returns:
@@ -227,9 +226,6 @@ class CoupangJobCrawler:
 
                 # 모든 페이지 크롤링
                 for page_num in range(1, max_page + 1):
-                    if max_jobs and len(job_links) >= max_jobs:
-                        break
-
                     page_url = f"{self.base_url}&page={page_num}" if page_num > 1 else self.base_url
                     response = self._make_request(page_url)
 
@@ -264,9 +260,6 @@ class CoupangJobCrawler:
                             job_links.append(href)
                             seen_urls.add(href)
                             page_jobs += 1
-
-                            if max_jobs and len(job_links) >= max_jobs:
-                                break
 
                     print(f"  📄 페이지 {page_num}: {page_jobs}개 공고 수집")
                     time.sleep(self.delay)
@@ -308,9 +301,6 @@ class CoupangJobCrawler:
 
                         job_links.append(href)
                         seen_urls.add(href)
-
-                        if max_jobs and len(job_links) >= max_jobs * 5:
-                            break
 
             # 중복 제거
             job_links = list(dict.fromkeys(job_links))
@@ -568,7 +558,6 @@ class CoupangJobCrawler:
 
     def crawl(self,
               output_file: str = "coupang_jobs.json",
-              max_jobs: Optional[int] = None,
               use_ai: bool = False,
               api_key: Optional[str] = None,
               korea_only: bool = False) -> List[Dict]:
@@ -577,7 +566,6 @@ class CoupangJobCrawler:
 
         Args:
             output_file: JSON 출력 파일
-            max_jobs: 최대 수집 개수
             use_ai: Claude API 사용 여부
             api_key: Claude API 키
             korea_only: 한국 채용만 수집 여부
@@ -589,7 +577,7 @@ class CoupangJobCrawler:
 
         try:
             # 채용공고 링크 수집
-            job_links = self.get_job_links(max_jobs, korea_only)
+            job_links = self.get_job_links(korea_only)
 
             if not job_links:
                 print("❌ 채용공고를 찾을 수 없습니다.")
@@ -627,10 +615,7 @@ class CoupangJobCrawler:
                     fail_count += 1
 
                 # 과부하 방지를 위한 대기
-                if korea_count < (max_jobs or 10):  # 충분히 많을 때까지 계속 크롤링
-                    time.sleep(self.delay)
-                else:
-                    break
+                time.sleep(self.delay)
 
             # 크롤링된 시간 순서로 정렬 (최신 먼저)
             # crawled_at 필드를 기준으로 역순 정렬 (최신이 먼저 오도록)
@@ -666,13 +651,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 사용 예시:
-  # 기본 크롤링 (모든 공고)
+  # 기본 크롤링 (모든 공고 전체 수집)
   python coupang_crawler.py
 
-  # 한국 채용만 10개 수집
-  python coupang_crawler.py --korea --max 10
+  # South Korea 위치의 모든 공고 수집
+  python coupang_crawler.py --location "South Korea"
 
-  # 한국 채용만 수집 (제한 없음)
+  # 한국 채용만 전체 수집 (클라이언트 필터링)
   python coupang_crawler.py --korea
 
   # Claude API 파싱 사용
@@ -681,8 +666,8 @@ def main():
   # 커스텀 출력 파일 및 대기시간
   python coupang_crawler.py -o results/jobs.json --delay 3
 
-  # 한국 채용만 5개 빠르게 수집
-  python coupang_crawler.py --korea --max 5 --delay 1
+  # Seoul 위치로 필터링하여 모든 공고 수집
+  python coupang_crawler.py --location "Seoul" --delay 1
         """
     )
 
@@ -690,13 +675,6 @@ def main():
         '-o', '--output',
         default='coupang_jobs.json',
         help='JSON 출력 파일 경로 (기본: coupang_jobs.json)'
-    )
-
-    parser.add_argument(
-        '--max',
-        type=int,
-        default=None,
-        help='최대 수집 개수 (기본: 제한 없음)'
     )
 
     parser.add_argument(
@@ -745,10 +723,7 @@ def main():
     print("=" * 70)
     print(f"📝 출력 파일: {args.output}")
     print(f"⏱️  요청 대기시간: {args.delay}초")
-    if args.max:
-        print(f"📊 최대 수집 개수: {args.max}")
-    else:
-        print(f"📊 최대 수집 개수: 제한 없음")
+    print(f"📊 수집 방식: 전체 크롤링 (제한 없음)")
     print(f"🤖 Claude API 파싱: {'활성화' if args.ai else '비활성화'}")
     if args.location:
         print(f"📍 위치 필터: {args.location}")
@@ -759,7 +734,6 @@ def main():
 
     crawler.crawl(
         output_file=args.output,
-        max_jobs=args.max,
         use_ai=args.ai,
         api_key=args.api_key,
         korea_only=args.korea

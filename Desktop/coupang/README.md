@@ -47,7 +47,6 @@ python coupang_crawler.py
 | 옵션 | 설명 | 기본값 |
 |------|------|--------|
 | `-o`, `--output` | JSON 출력 파일 경로 | `coupang_jobs.json` |
-| `--max` | 최대 수집 개수 | 제한 없음 |
 | `--delay` | 요청 간 대기시간 (초) | `2.0` |
 | `--location` | 위치 필터 (서버 필터링, 페이지네이션 지원) | 없음 |
 | `--korea` | 한국 채용만 수집 (클라이언트 필터링) | 비활성화 |
@@ -75,31 +74,25 @@ python coupang_crawler.py --location Seoul
 python coupang_crawler.py --location Busan
 ```
 
-#### 4. 한국 채용만 수집 (클라이언트 필터링, 모든 페이지 크롤링)
+#### 4. 한국 채용만 전체 수집 (클라이언트 필터링)
 
 ```bash
 python coupang_crawler.py --korea
 ```
 
-#### 5. 위치 필터 + 최대 개수 제한
-
-```bash
-python coupang_crawler.py --location "South Korea" --max 30
-```
-
-#### 6. 빠르게 크롤링 (대기시간 감소)
+#### 5. 빠르게 크롤링 (대기시간 감소)
 
 ```bash
 python coupang_crawler.py --location "South Korea" --delay 1
 ```
 
-#### 7. 커스텀 출력 파일
+#### 6. 커스텀 출력 파일
 
 ```bash
 python coupang_crawler.py --location "South Korea" -o results/korea_jobs.json
 ```
 
-#### 8. Claude API를 사용한 지능형 파싱
+#### 7. Claude API를 사용한 지능형 파싱
 
 ```bash
 python coupang_crawler.py --location "South Korea" --ai --api-key your-api-key
@@ -137,18 +130,23 @@ python coupang_crawler.py --location "South Korea" --ai
 
 출력되는 JSON 배열은 **최신 크롤링 순서로 정렬**되어 있습니다. 즉, 가장 최신으로 발견된 공고가 배열의 첫 번째에 위치합니다.
 
-### 페이지네이션
+### 전체 크롤링
 
-`--location` 옵션 사용 시 **자동으로 모든 페이지를 크롤링**합니다:
+크롤러는 기본적으로 **모든 사용 가능한 공고를 전체 크롤링**합니다:
 
-- 예: `--location "South Korea"`는 South Korea 위치의 모든 공고를 수집 (약 29개, 2페이지)
+**`--location` 옵션 사용 시:**
+- 자동으로 모든 페이지를 크롤링합니다
 - 내부적으로 이진 탐색을 사용하여 마지막 페이지를 자동으로 탐지
 - 각 페이지를 순차적으로 크롤링하여 모든 공고를 수집
+- 예: `--location "South Korea"`는 South Korea 위치의 모든 공고를 수집 (약 29개, 2페이지)
 
-**--korea 옵션 사용 시:**
-- 메인 페이지(페이지 1)에서 공고를 수집한 후
+**`--korea` 옵션 사용 시:**
+- 메인 페이지의 모든 공고를 수집한 후
 - 클라이언트 필터링으로 한국 공고만 추출
-- 페이지네이션을 지원하지 않음
+- 제한 없이 전체 수집
+
+**기본 사용 시 (옵션 없음):**
+- 메인 페이지의 모든 채용공고 링크를 수집하여 크롤링합니다
 
 ## 기술 스택
 
