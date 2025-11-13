@@ -195,7 +195,32 @@ class CoupangJobCrawler:
         Returns:
             마지막 페이지 번호
         """
-        low, high = 1, 100
+        # 먼저 증가하는 범위로 최대값을 찾기
+        max_possible = 1
+        test_page = 1
+
+        # 지수 증가로 최대값 찾기 (1 -> 2 -> 4 -> 8 -> 16 -> 32 ...)
+        while True:
+            if self.location:
+                test_url = f"{self.base_url}&page={test_page}"
+            else:
+                test_url = f"{self.base_url}?page={test_page}"
+
+            response = self._make_request(test_url)
+            if response:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                jobs = len(soup.find_all('a', href=lambda x: x and 'gh_jid=' in str(x)))
+
+                if jobs > 0:
+                    max_possible = test_page
+                    test_page *= 2
+                else:
+                    break
+            else:
+                break
+
+        # 이제 이진 탐색으로 정확한 값 찾기
+        low, high = max(1, max_possible // 2), max_possible * 2
         last_valid = 1
 
         while low <= high:
@@ -287,42 +312,52 @@ class CoupangJobCrawler:
                     time.sleep(self.delay)
 
             else:
-                # location 필터가 없는 경우 (원래 방식)
-                response = self._make_request(self.base_url)
-                if not response:
-                    print(f"  ❌ 페이지 접속 실패")
-                    return []
+                # location 필터가 없는 경우 (모든 페이지 크롤링)
+                print("  🌍 전체 공고 크롤링 (페이지네이션 적용)")
 
-                soup = BeautifulSoup(response.content, 'html.parser')
-                elements = soup.select('a[href*="/jobs/"]')
-                print(f"  🔍 선택자에서 {len(elements)}개 요소 발견")
+                # 최대 페이지 찾기
+                max_page = self._find_max_page()
+                print(f"✅ 최대 페이지: {max_page}개 발견")
 
-                for element in elements:
-                    href = element.get('href', '').strip()
+                # 모든 페이지 크롤링
+                for page_num in range(1, max_page + 1):
+                    page_url = f"{self.base_url}?page={page_num}" if page_num > 1 else self.base_url
+                    response = self._make_request(page_url)
 
-                    if not href:
+                    if not response:
+                        print(f"  ⚠️  페이지 {page_num} 접속 실패")
                         continue
 
-                    # 절대 URL로 변환
-                    if href.startswith('/'):
-                        href = urljoin(self.base_url, href)
-                    elif not href.startswith('http'):
-                        href = urljoin(self.base_url, href)
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    elements = soup.select('a[href*="/jobs/"]')
 
-                    # URL 필터링
-                    has_job_id = 'gh_jid=' in href or re.search(r'/jobs/\d+', href)
+                    page_jobs = 0
+                    for element in elements:
+                        href = element.get('href', '').strip()
 
-                    if (href and '/jobs/' in href
-                        and href not in seen_urls
-                        and href != self.base_url
-                        and not href.endswith('/jobs/')
-                        and not href.endswith('/jobs')
-                        and '저장된' not in href
-                        and 'saved' not in href.lower()
-                        and has_job_id):
+                        if not href:
+                            continue
 
-                        job_links.append(href)
-                        seen_urls.add(href)
+                        # 절대 URL로 변환
+                        if href.startswith('/'):
+                            href = urljoin(self.base_url, href)
+                        elif not href.startswith('http'):
+                            href = urljoin(self.base_url, href)
+
+                        # URL 필터링
+                        has_job_id = 'gh_jid=' in href or re.search(r'/jobs/\d+', href)
+
+                        if (href and '/jobs/' in href
+                            and href not in seen_urls
+                            and has_job_id
+                            and 'saved' not in href.lower()):
+
+                            job_links.append(href)
+                            seen_urls.add(href)
+                            page_jobs += 1
+
+                    print(f"  📄 페이지 {page_num}: {page_jobs}개 공고 수집")
+                    time.sleep(self.delay)
 
             # 중복 제거
             job_links = list(dict.fromkeys(job_links))
