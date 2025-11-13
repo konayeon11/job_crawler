@@ -37,6 +37,10 @@ class BaseCrawler(ABC):
         """동적 페이지 여부 (True/False)"""
         pass
 
+    def requires_playwright(self) -> bool:
+        """Playwright 사용 여부 (기본값: False)"""
+        return False
+
     def get_retry_count(self) -> int:
         """재시도 횟수 (기본값: 3)"""
         return 3

@@ -3,6 +3,7 @@ from .registry import CrawlerRegistry
 from .coupang import CoupangCrawler
 from .naver import NaverCrawler
 from .kakao import KakaoCrawler
+from .woowahan import WoowahanCrawler
 
 __all__ = [
     "BaseCrawler",
@@ -10,4 +11,5 @@ __all__ = [
     "CoupangCrawler",
     "NaverCrawler",
     "KakaoCrawler",
+    "WoowahanCrawler",
 ]

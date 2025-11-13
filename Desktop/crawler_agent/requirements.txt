@@ -10,6 +10,7 @@ beautifulsoup4==4.12.2
 # Browser Automation & PDF Capture
 selenium==4.15.2
 webdriver-manager==4.0.1
+playwright==1.40.0
 
 # PDF Processing
 pdfplumber==0.10.3

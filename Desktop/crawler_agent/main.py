@@ -19,6 +19,7 @@ from crawlers import (
     CoupangCrawler,
     NaverCrawler,
     KakaoCrawler,
+    WoowahanCrawler,
 )
 from agents import PDFCaptureAgent, StorageAgent
 from orchestrator import IntegratedCrawlerOrchestrator
@@ -44,6 +45,7 @@ def setup_registry() -> CrawlerRegistry:
         CoupangCrawler(),
         NaverCrawler(),
         KakaoCrawler(),
+        WoowahanCrawler(),
     ]
 
     for crawler in crawlers:
