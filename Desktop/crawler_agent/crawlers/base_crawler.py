@@ -1,10 +1,13 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+import asyncio
 
 
 class BaseCrawler(ABC):
     """
     모든 회사 크롤러가 구현해야 하는 추상 기본 클래스
+
+    비동기(async) 크롤링을 지원합니다.
     """
 
     @abstractmethod
@@ -18,12 +21,47 @@ class BaseCrawler(ABC):
         pass
 
     @abstractmethod
-    def extract_job_urls(self, html: str) -> List[Dict[str, str]]:
+    async def extract_job_urls(self, page: Any) -> List[Dict[str, str]]:
         """
-        HTML에서 개별 공고 URL 추출
+        동적 페이지에서 개별 공고 URL 추출 (비동기)
+
+        Args:
+            page: Playwright page 객체 또는 requests 응답
 
         Returns:
-            [{'url': '...', 'job_id': '...', 'title': '...'}]
+            [{'url': '...', 'job_id': '...', 'title': '...'}] 형식의 리스트
+        """
+        pass
+
+    @abstractmethod
+    async def parse_job_detail(self, page: Any, url: str, idx: int) -> Optional[Dict[str, str]]:
+        """
+        공고 상세 페이지 파싱 (비동기)
+
+        Args:
+            page: Playwright page 객체
+            url: 공고 URL
+            idx: 공고 인덱스
+
+        Returns:
+            {
+                'url': str,
+                'job_id': str,
+                'title': str,
+                'company': str,
+                'html': str,  # 원본 HTML
+                'posting_date': str,
+                'closing_date': str,
+                'location': str,
+                'job_description': str,
+                'required_qualifications': str,
+                'preferred_qualifications': str,
+                'company_description': str,
+                'team_description': str,
+                'selection_process': str,
+                'notes': str,
+                'metadata': Dict[str, Any]  # 추가 메타데이터
+            }
         """
         pass
 
@@ -46,5 +84,9 @@ class BaseCrawler(ABC):
         return 3
 
     def get_timeout(self) -> int:
-        """타임아웃 시간(초) (기본값: 30)"""
-        return 30
+        """타임아웃 시간(밀리초) (기본값: 30000)"""
+        return 30000
+
+    def get_max_concurrent_jobs(self) -> int:
+        """동시 처리 공고 수 (기본값: 3)"""
+        return 3
