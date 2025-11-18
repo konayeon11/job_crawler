@@ -31,7 +31,10 @@ class KakaoCrawler(BaseCrawler):
 
     async def extract_job_urls(self, page: Any) -> List[Dict[str, str]]:
         """
-        채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기)
+        채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기, 페이지네이션 + 다중 카테고리 지원)
+
+        카카오는 4가지 카테고리(기술, 서비스비즈, 디자인, 스태프)로 구성되어 있습니다.
+        Playwright를 사용해 버튼 클릭으로 카테고리를 선택합니다.
 
         Args:
             page: Playwright page 객체
@@ -40,70 +43,127 @@ class KakaoCrawler(BaseCrawler):
             [{'url': '...', 'job_id': '...', 'title': '...'}] 형식의 리스트
         """
         try:
-            logger.info("카카오 메인 페이지 로딩 중...")
-            await page.goto(
-                self.get_job_list_urls()[0],
-                wait_until='domcontentloaded',
-                timeout=self.get_timeout()
-            )
+            base_url = self.get_job_list_urls()[0]
+            job_links = []
+            max_pages = 50  # 카테고리당 최대 페이지 수
 
-            # JavaScript 실행 대기
-            logger.info("JavaScript 실행 대기 중...")
-            await asyncio.sleep(3)
+            # 카카오 채용 카테고리 정의 (버튼 텍스트, 표시명)
+            categories = [
+                ("기술", "기술"),
+                ("서비스비즈", "서비스비즈"),
+                ("디자인", "디자인"),
+                ("스태프", "스태프"),
+            ]
 
-            # 동적 로딩을 위해 스크롤
-            logger.info("페이지 스크롤 중...")
-            await page.evaluate("() => window.scrollTo(0, document.documentElement.scrollHeight)")
+            # 먼저 기본 페이지 로드
+            logger.info(f"카카오 채용 목록 페이지 로드 중: {base_url}")
+            await page.goto(base_url, wait_until='networkidle', timeout=self.get_timeout())
             await asyncio.sleep(2)
 
-            # 채용공고 링크 추출
-            logger.info("채용공고 링크 추출 중...")
-            job_links = []
+            # 각 카테고리별로 크롤링
+            for button_text, part_name in categories:
+                logger.info(f"\n{'='*60}")
+                logger.info(f"[{part_name}] 카테고리 크롤링 시작")
+                logger.info(f"{'='*60}")
 
-            try:
-                # 카카오 채용공고 URL 패턴 찾기
-                result = await page.evaluate("""
-                    () => {
-                        const links = [];
-                        // 카카오 채용공고 링크: /jobs/* 또는 job 클래스 포함
-                        document.querySelectorAll('a[href]').forEach(a => {
-                            const href = a.getAttribute('href');
-                            // 채용공고 상세 페이지 URL 찾기
-                            if (href && (href.includes('/jobs/') || href.match(/\\/job\\/\\d+/))) {
-                                links.push(href);
-                            }
-                        });
-                        // 중복 제거
-                        return [...new Set(links)];
-                    }
-                """)
+                try:
+                    # 카테고리 버튼 클릭하여 선택
+                    logger.info(f"[{part_name}] 카테고리 버튼 클릭 중...")
 
-                for href in result:
+                    # 버튼을 찾고 클릭
+                    category_button = None
                     try:
-                        full_url = self._normalize_url(href)
-                        if full_url not in job_links:
-                            job_links.append(full_url)
-                    except Exception:
+                        # txt_tab 클래스를 사용하여 버튼 찾기
+                        category_button = page.locator(f"button.txt_tab:has-text('{button_text}')")
+                        if await category_button.count() > 0:
+                            await category_button.first.click()
+                            logger.info(f"[{part_name}] 카테고리 버튼 클릭 완료")
+                            await asyncio.sleep(3)  # 카테고리 전환 대기
+                        else:
+                            # txt_tab 클래스 없이 다시 시도
+                            logger.info(f"[{part_name}] txt_tab 클래스로 찾기 실패, 다른 선택자 시도 중...")
+                            category_button = page.locator(f"[class*='txt_tab']:has-text('{button_text}')")
+                            if await category_button.count() > 0:
+                                await category_button.first.click()
+                                logger.info(f"[{part_name}] 대체 선택자로 버튼 클릭 완료")
+                                await asyncio.sleep(3)
+                            else:
+                                logger.warning(f"[{part_name}] 카테고리 버튼을 찾을 수 없습니다: {button_text}")
+                                continue
+                    except Exception as e:
+                        logger.warning(f"[{part_name}] 버튼 클릭 실패: {e}")
                         continue
 
-                logger.info(f"총 {len(job_links)}개의 채용공고 링크 추출")
+                    # 페이지네이션 처리
+                    page_num = 1
+                    has_more = True
+                    category_job_count = 0
 
-            except Exception as e:
-                logger.warning(f"JavaScript 실행 실패: {e}")
-                # Fallback: CSS 선택자로 링크 추출
-                try:
-                    job_elements = await page.query_selector_all('a[href*="/jobs/"]')
-                    for elem in job_elements:
-                        href = await elem.get_attribute('href')
-                        if href:
+                    while has_more and page_num <= max_pages:
+                        logger.info(f"[{part_name}] 페이지 {page_num} 스크래핑 중...")
+
+                        try:
+                            # JavaScript 실행 대기
+                            await asyncio.sleep(2)
+
+                            # 추가 네트워크 요청 대기
                             try:
-                                full_url = self._normalize_url(href)
-                                if full_url not in job_links:
-                                    job_links.append(full_url)
-                            except Exception:
-                                continue
-                except Exception as fallback_error:
-                    logger.error(f"CSS 선택자 방식도 실패: {fallback_error}")
+                                await page.wait_for_load_state('networkidle', timeout=5000)
+                            except:
+                                pass
+
+                            # 현재 페이지에서 공고 링크 추출
+                            result = await page.evaluate("""
+                                () => {
+                                    const links = [];
+                                    document.querySelectorAll('a[href*="/jobs/P-"]').forEach(a => {
+                                        const href = a.getAttribute('href');
+                                        if (href && href.includes('/jobs/P-')) {
+                                            const cleanUrl = href.split('?')[0];
+                                            links.push(cleanUrl);
+                                        }
+                                    });
+                                    return [...new Set(links)];
+                                }
+                            """)
+
+                            page_job_count = 0
+                            for href in result:
+                                try:
+                                    # 쿼리파라미터 없이 정규화
+                                    full_url = self._normalize_url(href)
+                                    if full_url not in job_links:
+                                        job_links.append(full_url)
+                                        page_job_count += 1
+                                except Exception:
+                                    continue
+
+                            logger.info(f"[{part_name}] 페이지 {page_num}: {page_job_count}개 공고 추출 (누적: {len(job_links)}개)")
+                            category_job_count += page_job_count
+
+                            # 더 이상 공고가 없으면 종료
+                            if page_job_count == 0:
+                                has_more = False
+                                logger.info(f"[{part_name}] 더 이상 공고가 없습니다.")
+                            else:
+                                # 다음 페이지로 이동
+                                page_num += 1
+                                next_page_url = f"{base_url}?page={page_num}"
+                                await page.goto(next_page_url, wait_until='networkidle', timeout=self.get_timeout())
+
+                        except Exception as e:
+                            logger.warning(f"[{part_name}] 페이지 {page_num} 파싱 실패: {e}")
+                            has_more = False
+
+                    logger.info(f"[{part_name}] 크롤링 완료: {category_job_count}개 공고")
+
+                except Exception as e:
+                    logger.error(f"[{part_name}] 카테고리 처리 실패: {e}")
+                    continue
+
+            logger.info(f"\n{'='*60}")
+            logger.info(f"전체 크롤링 완료: {len(job_links)}개의 채용공고 링크 추출")
+            logger.info(f"{'='*60}\n")
 
             return [
                 {
