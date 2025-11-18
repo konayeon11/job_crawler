@@ -34,7 +34,7 @@ class KakaoCrawler(BaseCrawler):
         채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기, 페이지네이션 + 다중 카테고리 지원)
 
         카카오는 4가지 카테고리(기술, 서비스비즈, 디자인, 스태프)로 구성되어 있습니다.
-        Playwright를 사용해 버튼 클릭으로 카테고리를 선택합니다.
+        URL 파라미터를 사용하여 카테고리별 페이지네이션을 처리합니다.
 
         Args:
             page: Playwright page 객체
@@ -47,53 +47,26 @@ class KakaoCrawler(BaseCrawler):
             job_links = []
             max_pages = 50  # 카테고리당 최대 페이지 수
 
-            # 카카오 채용 카테고리 정의 (버튼 텍스트, 표시명)
+            # 카카오 채용 카테고리 정의 (한글명, API part 파라미터)
+            # 네트워크 요청에서 확인된 format: ?part=BUSINESS_SERVICES&page=2
             categories = [
-                ("기술", "기술"),
-                ("서비스비즈", "서비스비즈"),
-                ("디자인", "디자인"),
-                ("스태프", "스태프"),
+                ("기술", "TECHNOLOGY"),
+                ("서비스비즈", "BUSINESS_SERVICES"),
+                ("디자인", "DESIGN"),
+                ("스태프", "STAFF"),
             ]
 
-            # 먼저 기본 페이지 로드
-            logger.info(f"카카오 채용 목록 페이지 로드 중: {base_url}")
-            await page.goto(base_url, wait_until='networkidle', timeout=self.get_timeout())
-            await asyncio.sleep(2)
+            logger.info(f"\n{'='*60}")
+            logger.info(f"카카오 채용 크롤링 시작: {base_url}")
+            logger.info(f"{'='*60}")
 
             # 각 카테고리별로 크롤링
-            for button_text, part_name in categories:
-                logger.info(f"\n{'='*60}")
-                logger.info(f"[{part_name}] 카테고리 크롤링 시작")
-                logger.info(f"{'='*60}")
+            for part_name, part_code in categories:
+                logger.info(f"\n{'='*50}")
+                logger.info(f"[{part_name}] 카테고리 크롤링 시작 (part={part_code})")
+                logger.info(f"{'='*50}")
 
                 try:
-                    # 카테고리 버튼 클릭하여 선택
-                    logger.info(f"[{part_name}] 카테고리 버튼 클릭 중...")
-
-                    # 버튼을 찾고 클릭
-                    category_button = None
-                    try:
-                        # txt_tab 클래스를 사용하여 버튼 찾기
-                        category_button = page.locator(f"button.txt_tab:has-text('{button_text}')")
-                        if await category_button.count() > 0:
-                            await category_button.first.click()
-                            logger.info(f"[{part_name}] 카테고리 버튼 클릭 완료")
-                            await asyncio.sleep(3)  # 카테고리 전환 대기
-                        else:
-                            # txt_tab 클래스 없이 다시 시도
-                            logger.info(f"[{part_name}] txt_tab 클래스로 찾기 실패, 다른 선택자 시도 중...")
-                            category_button = page.locator(f"[class*='txt_tab']:has-text('{button_text}')")
-                            if await category_button.count() > 0:
-                                await category_button.first.click()
-                                logger.info(f"[{part_name}] 대체 선택자로 버튼 클릭 완료")
-                                await asyncio.sleep(3)
-                            else:
-                                logger.warning(f"[{part_name}] 카테고리 버튼을 찾을 수 없습니다: {button_text}")
-                                continue
-                    except Exception as e:
-                        logger.warning(f"[{part_name}] 버튼 클릭 실패: {e}")
-                        continue
-
                     # 페이지네이션 처리
                     page_num = 1
                     has_more = True
@@ -103,7 +76,11 @@ class KakaoCrawler(BaseCrawler):
                         logger.info(f"[{part_name}] 페이지 {page_num} 스크래핑 중...")
 
                         try:
-                            # JavaScript 실행 대기
+                            # URL 파라미터를 사용하여 카테고리와 페이지 지정
+                            category_url = f"{base_url}?part={part_code}&page={page_num}"
+                            logger.info(f"[{part_name}] 접속 URL: {category_url}")
+
+                            await page.goto(category_url, wait_until='domcontentloaded', timeout=self.get_timeout())
                             await asyncio.sleep(2)
 
                             # 추가 네트워크 요청 대기
@@ -146,16 +123,14 @@ class KakaoCrawler(BaseCrawler):
                                 has_more = False
                                 logger.info(f"[{part_name}] 더 이상 공고가 없습니다.")
                             else:
-                                # 다음 페이지로 이동
+                                # 다음 페이지로 이동 준비
                                 page_num += 1
-                                next_page_url = f"{base_url}?page={page_num}"
-                                await page.goto(next_page_url, wait_until='networkidle', timeout=self.get_timeout())
 
                         except Exception as e:
                             logger.warning(f"[{part_name}] 페이지 {page_num} 파싱 실패: {e}")
                             has_more = False
 
-                    logger.info(f"[{part_name}] 크롤링 완료: {category_job_count}개 공고")
+                    logger.info(f"[{part_name}] 카테고리 크롤링 완료: {category_job_count}개 공고")
 
                 except Exception as e:
                     logger.error(f"[{part_name}] 카테고리 처리 실패: {e}")
