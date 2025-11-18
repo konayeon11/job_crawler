@@ -178,6 +178,29 @@ class LGCrawler(BaseCrawler):
             await page.goto(url, wait_until="networkidle", timeout=self.get_timeout())
             logger.info(f"[{idx}] 페이지 로드 완료: {url}")
 
+            # 팝업 닫기 (닫기 버튼 클릭 또는 ESC 키)
+            logger.info(f"[{idx}] 팝업 닫기 시도...")
+            try:
+                # 1. 닫기 버튼 찾기 (X 버튼)
+                close_button = page.locator('button[aria-label*="close"], button[aria-label*="Close"], [role="button"][aria-label*="close"]').first
+                if close_button:
+                    try:
+                        await close_button.click(timeout=3000)
+                        await asyncio.sleep(0.5)
+                        logger.info(f"[{idx}] 닫기 버튼으로 팝업 닫음")
+                    except:
+                        # 2. 실패하면 ESC 키
+                        await page.keyboard.press("Escape")
+                        await asyncio.sleep(0.5)
+                        logger.info(f"[{idx}] ESC 키로 팝업 닫음")
+                else:
+                    # 2. 버튼이 없으면 ESC 키
+                    await page.keyboard.press("Escape")
+                    await asyncio.sleep(0.5)
+                    logger.info(f"[{idx}] ESC 키로 팝업 닫음")
+            except Exception as e:
+                logger.warning(f"[{idx}] 팝업 닫기 실패: {e}")
+
             # URL에서 job_id 추출
             match = re.search(r'id=(\d+)', url)
             job_id = match.group(1) if match else "unknown"
@@ -207,7 +230,9 @@ class LGCrawler(BaseCrawler):
             # 펼쳐진 상태에서 스크린샷 캡처 (전체 페이지)
             screenshot_bytes = None
             try:
-                screenshot_bytes = await page.screenshot(full_page=True)
+                # 폰트 및 이미지 로드 완료 대기
+                await asyncio.sleep(2)
+                screenshot_bytes = await page.screenshot(full_page=True, timeout=60000)
                 logger.info(f"[{idx}] 스크린샷 캡처 완료 ({len(screenshot_bytes)} bytes)")
             except Exception as e:
                 logger.warning(f"[{idx}] 스크린샷 캡처 실패: {e}")
