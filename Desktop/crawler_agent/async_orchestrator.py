@@ -3,7 +3,7 @@
 
 특징:
 - 완전 비동기 처리
-- PDF 캡처 지원
+- 이미지 캡처 지원 (PNG/JPEG)
 - HTML, 벡터 임베딩, JSON 메타데이터 저장
 - 동시 처리로 성능 최적화
 """
@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import base64
+import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,7 @@ class JobPostingData:
     notes: str
     metadata: Dict[str, Any]
     vector_embedding: Optional[List[float]] = None  # 벡터 임베딩
+    screenshot_bytes: Optional[bytes] = None  # 스크린샷 바이너리 데이터
     created_at: str = None
 
     def __post_init__(self):
@@ -71,8 +73,8 @@ class AsyncPlaywrightOrchestrator:
     1. 채용 목록 페이지 오픈
     2. 개별 공고 URL 추출
     3. 각 공고 상세 정보 파싱 (병렬 처리)
-    4. PDF 캡처 (병렬 처리)
-    5. 저장소에 저장 (HTML + JSON 메타데이터)
+    4. 이미지 캡처 - PNG 포맷 (병렬 처리)
+    5. 저장소에 저장 (HTML + JSON 메타데이터 + PNG 이미지)
     """
 
     def __init__(
@@ -232,19 +234,14 @@ class AsyncPlaywrightOrchestrator:
     async def _extract_job_urls(self, page: Page, crawler: BaseCrawler) -> List[Dict[str, str]]:
         """채용 목록 페이지에서 공고 URL 추출"""
         try:
-            urls = crawler.get_job_list_urls()
-            logger.info(f"Loading job list from {urls[0]}")
-
-            await page.goto(urls[0], wait_until="networkidle", timeout=crawler.get_timeout())
-            await asyncio.sleep(crawler.get_wait_time())
-
+            # 크롤러의 extract_job_urls 메서드 호출 (회사별 맞춤 로직)
+            logger.info(f"Calling {crawler.get_company_name()}'s extract_job_urls method")
             job_urls = await crawler.extract_job_urls(page)
-            logger.info(f"Extracted {len(job_urls)} job URLs")
-
+            logger.info(f"Extracted {len(job_urls)} unique job URLs")
             return job_urls
 
         except Exception as e:
-            logger.error(f"Error extracting job URLs: {e}")
+            logger.error(f"Error extracting job URLs: {e}", exc_info=True)
             return []
 
     async def _parse_jobs_concurrent(
@@ -267,8 +264,13 @@ class AsyncPlaywrightOrchestrator:
                     job_data = await crawler.parse_job_detail(page, url_dict["url"], idx)
 
                     if job_data:
-                        # 원본 HTML 캡처
-                        html_content = await page.content()
+                        # 원본 HTML 캡처 (parse_job_detail에서 제공하지 않으면 현재 page에서 가져오기)
+                        html_content = job_data.get("html", "")
+                        if not html_content:
+                            html_content = await page.content()
+
+                        # 스크린샷 (parse_job_detail에서 제공된 경우만 사용)
+                        screenshot_bytes = job_data.get("screenshot", None)
 
                         return JobPostingData(
                             url=job_data.get("url", url_dict["url"]),
@@ -287,6 +289,7 @@ class AsyncPlaywrightOrchestrator:
                             selection_process=job_data.get("selection_process", ""),
                             notes=job_data.get("notes", ""),
                             metadata=job_data.get("metadata", {}),
+                            screenshot_bytes=screenshot_bytes,
                         )
                     return None
 
@@ -338,23 +341,38 @@ class AsyncPlaywrightOrchestrator:
                         subfolder,
                     )
 
-                    # 3. PDF 캡처 및 저장
-                    pdf_bytes = await self.playwright_capture_agent.capture_as_pdf(
-                        job.url,
-                        wait_time=crawler.get_wait_time(),
-                        timeout=crawler.get_timeout(),
-                    )
-
-                    pdf_path = None
-                    if pdf_bytes:
-                        pdf_path = await asyncio.to_thread(
-                            self.storage_agent.save_pdf_locally,
-                            pdf_bytes,
+                    # 3. 스크린샷 저장 (parse_job_detail에서 제공된 경우)
+                    screenshot_path = None
+                    if job.screenshot_bytes:
+                        screenshot_path = await asyncio.to_thread(
+                            self.storage_agent.save_image_locally,
+                            job.screenshot_bytes,
                             company,
                             job.job_id,
-                            job.title,
+                            f"{job.title}_screenshot",
                             subfolder,
+                            "png"
                         )
+                        logger.info(f"Screenshot saved: {screenshot_path}")
+                    else:
+                        # 스크린샷이 없으면 PlaywrightCaptureAgent로 캡처 (기존 로직)
+                        image_bytes = await self.playwright_capture_agent.capture_as_image(
+                            job.url,
+                            wait_time=crawler.get_wait_time(),
+                            timeout=crawler.get_timeout(),
+                            image_format="png"
+                        )
+
+                        if image_bytes:
+                            screenshot_path = await asyncio.to_thread(
+                                self.storage_agent.save_image_locally,
+                                image_bytes,
+                                company,
+                                job.job_id,
+                                job.title,
+                                subfolder,
+                                "png"
+                            )
 
                     return {
                         "success": True,
@@ -362,7 +380,7 @@ class AsyncPlaywrightOrchestrator:
                         "title": job.title,
                         "html_path": html_path,
                         "json_path": json_path,
-                        "pdf_path": pdf_path,
+                        "screenshot_path": screenshot_path,
                     }
 
                 except Exception as e:

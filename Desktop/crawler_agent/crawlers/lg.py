@@ -29,15 +29,17 @@ class LGCrawler(BaseCrawler):
         채용 목록 페이지 URL 리스트 반환
 
         Returns:
-            LG 채용공고 URL 리스트
+            LG CNS 채용공고 URL 리스트
         """
         return [
-            "https://careers.lg.com/",
+            "https://careers.lg.com/apply?c=CNS",
         ]
 
     async def extract_job_urls(self, page: Any) -> List[Dict[str, str]]:
         """
         채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기)
+
+        React 기반 SPA이므로 공고 제목 텍스트로 요소를 찾고 클릭하여 상세 페이지 URL 수집
 
         Args:
             page: Playwright page 객체
@@ -48,44 +50,93 @@ class LGCrawler(BaseCrawler):
         try:
             logger.info("LG 채용공고 링크 추출 중...")
 
-            # 페이지가 이미 로드되었다고 가정
-            await asyncio.sleep(1)
+            # 채용 목록 페이지 로드
+            list_url = self.get_job_list_urls()[0]
+            logger.info(f"List page 로드 중: {list_url}")
+            await page.goto(list_url, wait_until="networkidle", timeout=self.get_timeout())
+            logger.info("List page 로드 완료")
 
-            # 공고 목록 컨테이너 확인
+            # 페이지 렌더링 대기
+            await asyncio.sleep(2)
+
+            # [LG CNS] 텍스트를 포함하는 공고 요소 찾기
             job_links = []
             try:
-                # 공고 링크 선택자: a[href*="/apply/detail"]
-                elements = await page.query_selector_all('a[href*="/apply/detail"]')
+                # [LG CNS] 텍스트를 포함하는 모든 요소 찾기
+                job_elements = await page.locator('text=/\\[LG CNS\\]/').all()
+                logger.info(f"[LG CNS] 공고 요소 발견: {len(job_elements)}개")
 
-                for idx, elem in enumerate(elements):
+                for idx, elem in enumerate(job_elements):
                     try:
-                        href = await elem.get_attribute('href')
-                        text = await elem.inner_text()
+                        # 공고 제목 텍스트 가져오기
+                        title_text = await elem.inner_text()
 
-                        if href and '/apply/detail' in href:
-                            # URL에서 ID 추출: /apply/detail?id=1001083
-                            match = re.search(r'id=(\d+)', href)
-                            if match:
-                                job_id = match.group(1)
-                                full_url = href if href.startswith('http') else f"https://careers.lg.com{href}"
+                        logger.info(f"  [{idx+1}] 공고 처리: {title_text[:50]}")
 
-                                job_links.append({
-                                    'url': full_url,
-                                    'job_id': job_id,
-                                    'title': text.strip()[:100] if text else f'LG Job {job_id}'
-                                })
+                        # 클릭 가능한 부모 요소 찾기 (최대 10단계)
+                        clickable_elem = elem
+                        for _ in range(10):
+                            try:
+                                # 현재 요소 클릭
+                                await clickable_elem.click(timeout=5000)
+                                await asyncio.sleep(1)  # 페이지 이동 대기
+
+                                # URL 확인
+                                current_url = page.url
+                                if "/apply/detail" in current_url or "id=" in current_url:
+                                    # 상세 페이지로 이동했음
+                                    match = re.search(r'id=(\d+)', current_url)
+                                    if match:
+                                        job_id = match.group(1)
+                                        job_links.append({
+                                            'url': current_url,
+                                            'job_id': job_id,
+                                            'title': title_text.strip()[:100]
+                                        })
+                                        logger.info(f"    URL 수집: {current_url}")
+                                        break
+                                    else:
+                                        logger.warning(f"    ID 추출 실패: {current_url}")
+                                        break
+                                else:
+                                    # 아직 상세 페이지가 아니면 부모 요소로 이동
+                                    parent = clickable_elem.locator("xpath=parent::*").first
+                                    if parent:
+                                        clickable_elem = parent
+                                    else:
+                                        logger.warning(f"    부모 요소 없음")
+                                        break
+                            except Exception as e:
+                                logger.debug(f"    클릭 시도 실패: {e}")
+                                parent = clickable_elem.locator("xpath=parent::*").first
+                                if parent:
+                                    clickable_elem = parent
+                                else:
+                                    break
+
+                        # 목록 페이지로 돌아가기
+                        if len(job_links) > 0 and job_links[-1]['title'] == title_text.strip()[:100]:
+                            await page.goto(list_url, wait_until="networkidle", timeout=self.get_timeout())
+                            await asyncio.sleep(1)
+
                     except Exception as e:
-                        logger.warning(f"링크 {idx} 처리 실패: {e}")
+                        logger.warning(f"공고 {idx} 처리 실패: {e}")
+                        # 목록으로 돌아가기
+                        try:
+                            await page.goto(list_url, wait_until="networkidle", timeout=self.get_timeout())
+                            await asyncio.sleep(1)
+                        except:
+                            pass
                         continue
 
             except Exception as e:
-                logger.warning(f"공고 목록 추출 실패: {e}")
+                logger.warning(f"공고 목록 추출 실패: {e}", exc_info=True)
 
             logger.info(f"총 {len(job_links)}개 공고 링크 추출됨")
             return job_links
 
         except Exception as e:
-            logger.error(f"공고 추출 중 오류: {e}")
+            logger.error(f"공고 추출 중 오류: {e}", exc_info=True)
             return []
 
     async def parse_job_detail(self, page: Any, url: str, idx: int) -> Optional[Dict[str, str]]:
@@ -116,6 +167,7 @@ class LGCrawler(BaseCrawler):
                 'team_description': str,
                 'selection_process': str,
                 'notes': str,
+                'screenshot': Optional[bytes],  # 펼쳐진 상태의 스크린샷
                 'metadata': Dict[str, Any]
             }
         """
@@ -124,7 +176,7 @@ class LGCrawler(BaseCrawler):
 
             # 페이지 로드 (networkidle까지 대기)
             await page.goto(url, wait_until="networkidle", timeout=self.get_timeout())
-            await asyncio.sleep(2)
+            logger.info(f"[{idx}] 페이지 로드 완료: {url}")
 
             # URL에서 job_id 추출
             match = re.search(r'id=(\d+)', url)
@@ -133,6 +185,7 @@ class LGCrawler(BaseCrawler):
             # 모든 MUI Accordion Summary를 펼치기
             logger.info(f"[{idx}] 아코디언 펼치기 시작...")
             accordion_summaries = await page.locator(".MuiAccordion-root .MuiAccordionSummary-root").all()
+            logger.info(f"[{idx}] 발견된 아코디언 수: {len(accordion_summaries)}")
 
             for i, accordion in enumerate(accordion_summaries):
                 try:
@@ -144,11 +197,20 @@ class LGCrawler(BaseCrawler):
                     logger.warning(f"[{idx}] 아코디언 {i+1} 펼치기 실패: {e}")
                     continue
 
-            # 애니메이션 완료 대기
+            # 아코디언 펼침 애니메이션 완료 대기
             await asyncio.sleep(0.5)
 
             # 원본 HTML 수집 (펼쳐진 상태)
             html_content = await page.content()
+            logger.info(f"[{idx}] HTML 수집 완료 ({len(html_content)} bytes)")
+
+            # 펼쳐진 상태에서 스크린샷 캡처 (전체 페이지)
+            screenshot_bytes = None
+            try:
+                screenshot_bytes = await page.screenshot(full_page=True)
+                logger.info(f"[{idx}] 스크린샷 캡처 완료 ({len(screenshot_bytes)} bytes)")
+            except Exception as e:
+                logger.warning(f"[{idx}] 스크린샷 캡처 실패: {e}")
 
             # 공고 제목
             title = ""
@@ -230,10 +292,12 @@ class LGCrawler(BaseCrawler):
                 'team_description': '',
                 'selection_process': '',
                 'notes': '',
+                'screenshot': screenshot_bytes,
                 'metadata': {
                     'source': 'lg_cns',
                     'crawled_index': idx,
-                    'accordion_expanded': len(accordion_summaries) > 0
+                    'accordion_expanded': len(accordion_summaries) > 0,
+                    'accordion_count': len(accordion_summaries)
                 }
             }
 
