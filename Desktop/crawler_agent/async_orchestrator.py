@@ -58,9 +58,10 @@ class JobPostingData:
         return asdict(self)
 
     def to_json_metadata(self) -> str:
-        """JSON 메타데이터로 변환 (벡터 제외)"""
+        """JSON 메타데이터로 변환 (HTML, 스크린샷, 벡터 제외)"""
         data = self.to_dict()
         data.pop("html_content", None)  # HTML은 제외
+        data.pop("screenshot_bytes", None)  # 스크린샷 바이너리는 제외
         data.pop("vector_embedding", None)  # 벡터도 제외
         return json.dumps(data, ensure_ascii=False, indent=2)
 
