@@ -39,7 +39,11 @@ class TossCrawler(BaseCrawler):
         """
         채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기)
 
-        272개 포지션을 모두 스크롤해서 각 포지션의 모든 회사 공고를 추출합니다.
+        토스의 포지션 처리 로직:
+        1. 포지션 목록 페이지에서 모든 포지션 로드
+        2. 포지션별로:
+           - span.css-zmjrej이 여러개면 → 계열사 선택 페이지 (토글 필요)
+           - 아니면 → 직접 세부공고 페이지
 
         Args:
             page: Playwright page 객체
@@ -48,7 +52,7 @@ class TossCrawler(BaseCrawler):
             [{'url': '...', 'job_id': '...', 'title': '...'}] 형식의 리스트
         """
         try:
-            logger.info("토스 전체 포지션 및 공고 링크 추출 중...")
+            logger.info("토스 포지션 및 계열사 공고 추출 시작...")
 
             # 포지션 목록 페이지 로드
             list_url = self.get_job_list_urls()[0]
@@ -61,21 +65,19 @@ class TossCrawler(BaseCrawler):
             logger.info("포지션 페이지 로드 완료")
 
             # 페이지 렌더링 대기
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
             # Step 1: 모든 포지션 로드 (전체 페이지 스크롤)
             logger.info("모든 포지션 로드를 위해 페이지 스크롤 중...")
             try:
                 last_height = await page.evaluate("document.body.scrollHeight")
                 scroll_count = 0
-                max_scrolls = 100  # 무한 루프 방지
+                max_scrolls = 100
 
                 while scroll_count < max_scrolls:
-                    # 아래로 스크롤
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)
 
-                    # 새로운 높이 확인
                     new_height = await page.evaluate("document.body.scrollHeight")
                     if new_height == last_height:
                         logger.info(f"모든 포지션 로드 완료 (총 {scroll_count}회 스크롤)")
@@ -84,57 +86,230 @@ class TossCrawler(BaseCrawler):
                     last_height = new_height
                     scroll_count += 1
 
-                # 페이지 상단으로 스크롤
                 await page.evaluate("window.scrollTo(0, 0)")
                 await asyncio.sleep(1)
 
             except Exception as e:
                 logger.warning(f"페이지 스크롤 중 오류: {e}")
 
-            # Step 2: 모든 job-detail 링크 추출
-            logger.info("모든 세부 공고 링크 추출 중...")
+            # Step 2: 포지션 아이템 찾기 (li.css-1lnizc9)
+            logger.info("포지션 아이템 수집 중...")
             job_links = []
+            seen_urls = set()
+
             try:
-                # JavaScript로 모든 job-detail 링크 수집 (중복 제거)
-                job_data = await page.evaluate("""() => {
-                    const jobs = [];
-                    const seen = new Set();
-                    const links = document.querySelectorAll('a[href*="job-detail"]');
+                # 포지션 리스트 아이템 찾기 (li.css-1lnizc9)
+                position_items = await page.locator("li.css-1lnizc9").all()
+                logger.info(f"발견된 포지션 아이템: {len(position_items)}개")
 
-                    for (let link of links) {
-                        const href = link.href;
-                        if (!href.includes('job-detail')) continue;
+                for pos_idx, item in enumerate(position_items):
+                    try:
+                        # Step 2-1: 포지션 제목 추출
+                        pos_title = ""
+                        try:
+                            # p 태그나 직접 span에서 제목 추출
+                            title_elem = item.locator("p")
+                            if await title_elem.count() > 0:
+                                pos_title = await title_elem.first.inner_text()
+                            else:
+                                # span에서 첫 번째 텍스트 추출
+                                text = await item.inner_text()
+                                if text:
+                                    pos_title = text.split('\n')[0] if '\n' in text else text
+                        except:
+                            pos_title = f"Position {pos_idx}"
 
-                        // job_id 추출
-                        const match = href.match(/job_id=([^&]+)/);
-                        if (match && !seen.has(match[1])) {
-                            const job_id = match[1];
-                            const title = link.textContent.trim() || `Job ${job_id}`;
+                        logger.info(f"[{pos_idx}] 포지션 처리: {pos_title[:40]}")
 
-                            seen.add(job_id);
-                            jobs.push({
-                                url: href,
-                                job_id: job_id,
-                                title: title
-                            });
-                        }
-                    }
+                        # Step 2-2: 해당 포지션 내 span.css-zmjrej 개수 확인 (계열사 수)
+                        # span.css-zmjrej은 각 계열사 정보를 나타냄
+                        try:
+                            spans = await item.locator("span.css-zmjrej").all()
+                            num_affiliates = len(spans)
+                            logger.info(f"  계열사 수: {num_affiliates}개")
 
-                    return jobs;
-                }""")
+                            if num_affiliates > 1:
+                                # 여러 계열사 = 토글 및 공고보기 버튼 필요
+                                logger.info(f"  다중 계열사 포지션 - 토글 펼치기 시작...")
 
-                job_links = job_data
-                logger.info(f"발견된 세부 공고 URL: {len(job_links)}개")
+                                # 모든 토글 버튼(div.css-15dn0i8) 찾기 및 클릭
+                                toggles = await item.locator("div.css-15dn0i8.em74uf22").all()
+                                logger.info(f"  발견된 토글: {len(toggles)}개")
 
-                for idx, job in enumerate(job_links[:20], 1):  # 처음 20개만 로그
-                    logger.info(f"  [{idx}] {job['title'][:40]} -> {job['url'][:60]}")
-                if len(job_links) > 20:
-                    logger.info(f"  ... 외 {len(job_links) - 20}개")
+                                for toggle_idx, toggle in enumerate(toggles):
+                                    try:
+                                        # 토글 버튼 클릭 (펼치기)
+                                        await toggle.click()
+                                        await asyncio.sleep(0.5)
+                                        logger.info(f"    토글 {toggle_idx + 1} 펼침")
+                                    except Exception as e:
+                                        logger.warning(f"    토글 {toggle_idx + 1} 클릭 실패: {e}")
+                                        continue
+
+                                # 모든 토글이 펼쳐진 후 포지션 선택 섹션 찾기
+                                await asyncio.sleep(1)
+
+                                # 포지션 선택 섹션 (div.css-101drag.em74uf20) 찾기
+                                position_sections = await item.locator("div.css-101drag.em74uf20").all()
+                                logger.info(f"  발견된 포지션 선택 섹션: {len(position_sections)}개")
+
+                                # 각 계열사별 포지션 선택 섹션 처리
+                                for sect_idx, section in enumerate(position_sections):
+                                    try:
+                                        logger.info(f"    섹션 {sect_idx + 1} 처리...")
+
+                                        # 섹션 내 선택 가능한 포지션들 찾기 (css-1pheyry: 미선택, css-1m33twj: 선택됨)
+                                        position_divs = await section.locator("div[class*='css-1pheyry'], div[class*='css-1m33twj']").all()
+                                        logger.info(f"      포지션 수: {len(position_divs)}개")
+
+                                        # 각 포지션을 하나씩 선택하고 공고보기 클릭
+                                        for pos_div_idx, pos_div in enumerate(position_divs):
+                                            try:
+                                                # 포지션 텍스트 추출
+                                                pos_text = ""
+                                                try:
+                                                    pos_text = await pos_div.inner_text()
+                                                except:
+                                                    pos_text = f"Position {pos_div_idx}"
+
+                                                logger.info(f"        포지션 {pos_div_idx + 1} 선택: {pos_text[:30]}")
+
+                                                # 포지션 클릭 (선택)
+                                                await pos_div.click()
+                                                await asyncio.sleep(0.8)
+
+                                                # 공고보기 버튼 찾기 (섹션 내에서)
+                                                view_buttons = await section.locator("button:has-text('공고보기')").all()
+                                                logger.info(f"          공고보기 버튼: {len(view_buttons)}개")
+
+                                                # 각 공고보기 버튼 클릭
+                                                for btn_idx, btn in enumerate(view_buttons):
+                                                    try:
+                                                        logger.info(f"          공고보기 버튼 {btn_idx + 1} 클릭...")
+
+                                                        # 버튼의 부모 요소에서 링크 먼저 찾기
+                                                        try:
+                                                            parent = btn.locator("xpath=ancestor::*[1]")
+                                                            links_in_parent = await parent.locator("a[href*='job-detail']").all()
+
+                                                            if links_in_parent:
+                                                                for link in links_in_parent:
+                                                                    try:
+                                                                        href = await link.get_attribute('href')
+                                                                        if href and 'job-detail' in href and href not in seen_urls:
+                                                                            # URL 정규화
+                                                                            if href.startswith('/'):
+                                                                                href = "https://toss.im" + href
+
+                                                                            # job_id 추출
+                                                                            match = re.search(r'job_id=([^&]+)', href)
+                                                                            if match:
+                                                                                job_id = match.group(1)
+                                                                                job_links.append({
+                                                                                    'url': href,
+                                                                                    'job_id': job_id,
+                                                                                    'title': pos_title.strip()
+                                                                                })
+                                                                                seen_urls.add(href)
+                                                                                logger.info(f"            [발견] {pos_title[:35]} -> {job_id}")
+                                                                    except Exception as e:
+                                                                        logger.debug(f"링크 처리 중 오류: {e}")
+                                                                        continue
+                                                            else:
+                                                                # 부모에서 못 찾으면 버튼 클릭해서 페이지 이동
+                                                                logger.info(f"            버튼 클릭...")
+                                                                try:
+                                                                    await btn.click(timeout=5000)
+                                                                    await asyncio.sleep(1)
+
+                                                                    # 페이지 URL이 변경되었는지 확인
+                                                                    current_url = page.url
+                                                                    if 'job-detail' in current_url:
+                                                                        match = re.search(r'job_id=([^&]+)', current_url)
+                                                                        if match:
+                                                                            job_id = match.group(1)
+                                                                            if current_url not in seen_urls:
+                                                                                job_links.append({
+                                                                                    'url': current_url,
+                                                                                    'job_id': job_id,
+                                                                                    'title': pos_title.strip()
+                                                                                })
+                                                                                seen_urls.add(current_url)
+                                                                                logger.info(f"            [발견] {pos_title[:35]} -> {job_id}")
+
+                                                                        # 목록으로 돌아가기
+                                                                        await page.go_back()
+                                                                        await asyncio.sleep(1)
+                                                                except Exception as e:
+                                                                    logger.warning(f"            버튼 클릭 중 오류: {e}")
+
+                                                        except Exception as e:
+                                                            logger.warning(f"          URL 추출 중 오류: {e}")
+                                                            continue
+
+                                                    except Exception as e:
+                                                        logger.warning(f"          공고보기 버튼 처리 중 오류: {e}")
+                                                        continue
+
+                                            except Exception as e:
+                                                logger.warning(f"        포지션 {pos_div_idx + 1} 처리 중 오류: {e}")
+                                                continue
+
+                                    except Exception as e:
+                                        logger.warning(f"    섹션 {sect_idx + 1} 처리 중 오류: {e}")
+                                        continue
+
+                            else:
+                                # 단일 계열사 = 직접 li 클릭해서 세부공고 페이지 진입
+                                logger.info(f"  단일 계열사 포지션 - 직접 클릭...")
+                                try:
+                                    await item.click()
+                                    await asyncio.sleep(2)
+
+                                    # 세부 공고 URL 추출
+                                    current_url = page.url
+                                    if 'job-detail' in current_url:
+                                        # 현재 페이지가 세부공고 페이지
+                                        match = re.search(r'job_id=([^&]+)', current_url)
+                                        if match:
+                                            job_id = match.group(1)
+                                            job_links.append({
+                                                'url': current_url,
+                                                'job_id': job_id,
+                                                'title': pos_title.strip()
+                                            })
+                                            seen_urls.add(current_url)
+                                            logger.info(f"    [발견] {pos_title[:35]} -> {job_id}")
+
+                                    # 목록으로 돌아가기
+                                    await page.goto(list_url, wait_until="load", timeout=self.get_timeout())
+                                    await asyncio.sleep(1)
+
+                                except Exception as e:
+                                    logger.warning(f"  단일 계열사 처리 중 오류: {e}")
+                                    # 목록으로 돌아가기
+                                    try:
+                                        await page.goto(list_url, wait_until="load", timeout=self.get_timeout())
+                                        await asyncio.sleep(1)
+                                    except:
+                                        pass
+
+                        except Exception as e:
+                            logger.warning(f"  포지션 처리 중 오류: {e}")
+
+                    except Exception as e:
+                        logger.warning(f"포지션 {pos_idx} 처리 중 오류: {e}")
+                        continue
 
             except Exception as e:
-                logger.error(f"공고 링크 추출 실패: {e}", exc_info=True)
+                logger.error(f"공고 추출 중 오류: {e}", exc_info=True)
 
-            logger.info(f"총 {len(job_links)}개 세부 공고 링크 추출됨")
+            logger.info(f"총 {len(job_links)}개 세부 공고 URL 추출됨")
+            for idx, job in enumerate(job_links[:20], 1):
+                logger.info(f"  [{idx}] {job['title'][:40]} -> {job['url'][:60]}")
+            if len(job_links) > 20:
+                logger.info(f"  ... 외 {len(job_links) - 20}개")
+
             return job_links
 
         except Exception as e:
@@ -144,6 +319,10 @@ class TossCrawler(BaseCrawler):
     async def parse_job_detail(self, page: Any, url: str, idx: int) -> Optional[Dict[str, str]]:
         """
         공고 상세 페이지 파싱 (비동기)
+
+        두 가지 케이스를 처리:
+        1. 다중 계열사: 계열사 선택 페이지 → 계열사 선택 필요 → 상세 페이지 로드
+        2. 단일 계열사: 직접 상세 페이지 로드
 
         Args:
             page: Playwright page 객체
@@ -169,54 +348,99 @@ class TossCrawler(BaseCrawler):
                 await page.goto(url, wait_until="load", timeout=self.get_timeout())
 
             logger.info(f"[{idx}] 페이지 로드 완료: {url}")
-
-            # 페이지 렌더링 대기
             await asyncio.sleep(2)
 
-            # 아코디언 펼치기 (모든 섹션 펼침)
+            # Step 1: 페이지 유형 감지
+            # 계열사 선택 페이지 vs 상세 페이지 판정
+            page_html = await page.content()
+
+            # Body 높이로 판정 (계열사 선택 페이지는 보통 2200px 이하)
+            body_box = await page.locator("body").bounding_box()
+            body_height = body_box['height'] if body_box else 0
+
+            # 콘텐츠 영역 크기 확인
+            content_elem = await page.query_selector('[class*="content"], [class*="description"], main, article')
+            is_affiliate_selection_page = False
+
+            if body_height < 2300 and "계열사" in page_html and not content_elem:
+                is_affiliate_selection_page = True
+                logger.info(f"[{idx}] 계열사 선택 페이지로 감지 (높이: {body_height}px)")
+            else:
+                logger.info(f"[{idx}] 직접 상세 페이지로 감지 (높이: {body_height}px)")
+
+            # Step 2: 계열사 선택 페이지인 경우, 계열사 선택 후 상세 페이지 로드
+            if is_affiliate_selection_page:
+                logger.info(f"[{idx}] 계열사 선택 페이지에서 첫 번째 계열사 자동 선택...")
+                try:
+                    # Select 요소 찾기
+                    select_elem = await page.query_selector('select')
+                    if select_elem:
+                        # 현재 선택된 옵션 확인
+                        current_option = await page.query_selector('select option[selected]')
+                        if current_option:
+                            option_text = await current_option.inner_text()
+                            logger.info(f"[{idx}] 현재 선택된 계열사: {option_text[:30]}")
+
+                        # Select 요소의 change 이벤트가 트리거되도록 값 변경
+                        await select_elem.select_option(index=0)
+                        await asyncio.sleep(2)  # 선택 후 페이지 업데이트 대기
+
+                        logger.info(f"[{idx}] 계열사 선택 완료, 페이지 업데이트 대기 중...")
+
+                        # 페이지가 업데이트될 때까지 대기
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=self.get_timeout())
+                        except:
+                            await asyncio.sleep(2)
+
+                        # 업데이트된 HTML 수집
+                        page_html = await page.content()
+                        logger.info(f"[{idx}] 페이지 업데이트 완료")
+                    else:
+                        logger.warning(f"[{idx}] Select 요소 찾기 실패, 현재 페이지로 진행")
+                except Exception as e:
+                    logger.warning(f"[{idx}] 계열사 선택 처리 실패: {e}, 현재 페이지로 진행")
+
+            # Step 3: 아코디언 펼치기 (모든 섹션 펼침)
             logger.info(f"[{idx}] 아코디언 섹션 펼치기 시도...")
             try:
-                # 모든 버튼 찾기 (아코디언 토글 버튼은 보통 button 태그)
                 buttons = await page.locator('button').all()
+                click_count = 0
                 for btn in buttons:
                     try:
-                        # 버튼이 보이는지 확인
                         is_visible = await btn.is_visible()
                         if is_visible:
-                            # 다양한 텍스트로 펼치기 버튼 확인 (한글, 영문 모두)
                             text = await btn.inner_text()
-                            # 아코디언 펼치기 버튼 특징: 작은 텍스트나 아이콘 버튼
-                            # 모든 보이는 버튼을 클릭해서 펼치기 시도
                             try:
                                 await btn.click(timeout=3000)
-                                await asyncio.sleep(0.3)  # 펼치는 애니메이션 대기
-                                logger.info(f"[{idx}] 버튼 클릭: {text[:30]}")
+                                await asyncio.sleep(0.2)
+                                click_count += 1
                             except:
                                 pass
                     except:
                         pass
 
-                logger.info(f"[{idx}] 아코디언 펼치기 완료")
+                logger.info(f"[{idx}] 아코디언 펼치기 완료 ({click_count}개 버튼 클릭)")
             except Exception as e:
-                logger.warning(f"[{idx}] 아코디언 펼치기 실패: {e}")
+                logger.warning(f"[{idx}] 아코디언 펼치기 중 오류: {e}")
 
-            # 모든 섹션이 펼쳐진 후 추가 대기
             await asyncio.sleep(1)
 
-            # URL에서 job_id 추출
+            # Step 4: 최종 HTML 수집
             match = re.search(r'job_id=([^&]+)', url)
             job_id = match.group(1) if match else "unknown"
 
-            # 원본 HTML 수집
             html_content = await page.content()
-            logger.info(f"[{idx}] HTML 수집 완료 ({len(html_content)} bytes)")
+            logger.info(f"[{idx}] 최종 HTML 수집 완료 ({len(html_content)} bytes)")
 
-            # 공고 제목
+            # Step 5: 공고 제목 추출
             title = ""
             try:
-                title_elem = await page.query_selector('h1, .job-title, [class*="title"]')
+                title_elem = await page.query_selector('h1')
                 if title_elem:
                     title = await title_elem.inner_text()
+                    # 제목에서 계열사 정보 제거 (예: "[토스뱅크] Job Title" → "Job Title")
+                    title = re.sub(r'^\[.*?\]\s*', '', title).strip()
             except:
                 pass
 
@@ -232,30 +456,28 @@ class TossCrawler(BaseCrawler):
             except:
                 pass
 
-            # 세부 공고 페이지 여부 확인 (실제 내용이 있는 페이지인지 확인)
-            # 공고 설명, job 키워드, 자격요건 등이 있으면 세부 페이지로 판단
+            # Step 6: 세부 공고 페이지 여부 재확인
             is_detail_page = (
                 len(job_description) > 200 or
-                'job' in html_content.lower() or
-                'position' in html_content.lower() or
                 '직무' in html_content or
-                '요구' in html_content
+                '자격' in html_content or
+                '요구' in html_content or
+                '경험' in html_content
             )
 
-            logger.info(f"[{idx}] 세부 페이지 판정: {is_detail_page}")
+            logger.info(f"[{idx}] 최종 페이지 판정: {'세부 페이지' if is_detail_page else '계열사 선택 페이지'}")
 
-            # 스크린샷 캡처 (세부 페이지에서만 - viewport 크기만 캡처)
+            # Step 7: 스크린샷 캡처
             screenshot_bytes = None
             if is_detail_page:
                 try:
-                    await asyncio.sleep(1)  # 페이지 렌더링 대기
-                    # full_page=False로 설정하여 현재 viewport 크기만 캡처 (길이 제한)
+                    await asyncio.sleep(1)
                     screenshot_bytes = await page.screenshot(full_page=False, timeout=60000)
                     logger.info(f"[{idx}] 스크린샷 캡처 완료 ({len(screenshot_bytes)} bytes)")
                 except Exception as e:
                     logger.warning(f"[{idx}] 스크린샷 캡처 실패: {e}")
             else:
-                logger.info(f"[{idx}] 세부 공고가 아닌 페이지로 판단 - 스크린샷 캡처 건너뜀")
+                logger.info(f"[{idx}] 계열사 선택 페이지 - 스크린샷 캡처 건너뜀")
 
             result = {
                 'url': url,
@@ -277,6 +499,8 @@ class TossCrawler(BaseCrawler):
                 'metadata': {
                     'source': 'toss',
                     'crawled_index': idx,
+                    'is_detail_page': is_detail_page,
+                    'was_affiliate_selection': is_affiliate_selection_page,
                 }
             }
 
