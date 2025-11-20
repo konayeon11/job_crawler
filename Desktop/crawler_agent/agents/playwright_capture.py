@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class PlaywrightCaptureAgent:
     """
-    Playwright를 사용하여 웹페이지를 PDF로 캡처하는 Agent
+    Playwright를 사용하여 웹페이지를 이미지로 캡처하는 Agent
     동적 콘텐츠 로드에 최적화되어 있음
     """
 
@@ -21,24 +21,26 @@ class PlaywrightCaptureAgent:
         """
         self.headless = headless
 
-    async def capture_as_pdf(
+    async def capture_as_image(
         self,
         url: str,
         wait_time: int = 5,
         timeout: int = 60000,
-        scroll: bool = True
+        scroll: bool = True,
+        image_format: str = "png"
     ) -> Optional[bytes]:
         """
-        Playwright로 웹페이지를 PDF로 캡처
+        Playwright로 웹페이지를 이미지로 캡처
 
         Args:
             url: 캡처할 URL
             wait_time: 페이지 로드 후 대기 시간(초)
             timeout: 페이지 로드 타임아웃(밀리초)
             scroll: 전체 페이지 스크롤 여부
+            image_format: 이미지 포맷 ('png' 또는 'jpeg')
 
         Returns:
-            PDF 바이너리 데이터 또는 None (실패 시)
+            이미지 바이너리 데이터 또는 None (실패 시)
         """
         try:
             from playwright.async_api import async_playwright
@@ -61,25 +63,56 @@ class PlaywrightCaptureAgent:
                     if scroll:
                         await self._scroll_page(page)
 
-                    logger.info("Capturing page as PDF...")
+                    logger.info(f"Capturing page as {image_format.upper()} image...")
 
-                    # PDF 저장
-                    pdf_bytes = await page.pdf(
-                        format="A4",
-                        print_background=True,
-                        margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}
+                    # 이미지로 캡처 (현재 viewport 크기만 캡처 - 길이 제한)
+                    image_bytes = await page.screenshot(
+                        path=None,
+                        full_page=False,
+                        type=image_format,
+                        quality=95 if image_format == "jpeg" else None
                     )
 
-                    logger.info(f"PDF captured successfully from {url}")
-                    return pdf_bytes
+                    logger.info(f"Image captured successfully from {url}")
+                    return image_bytes
 
                 finally:
                     await context.close()
                     await browser.close()
 
         except Exception as e:
-            logger.error(f"Error capturing PDF from {url}: {e}")
+            logger.error(f"Error capturing image from {url}: {e}")
             return None
+
+    async def capture_as_pdf(
+        self,
+        url: str,
+        wait_time: int = 5,
+        timeout: int = 60000,
+        scroll: bool = True
+    ) -> Optional[bytes]:
+        """
+        (호환성 유지) Playwright로 웹페이지를 이미지로 캡처
+
+        주의: 이전 PDF 캡처 대신 이미지 캡처를 수행합니다.
+
+        Args:
+            url: 캡처할 URL
+            wait_time: 페이지 로드 후 대기 시간(초)
+            timeout: 페이지 로드 타임아웃(밀리초)
+            scroll: 전체 페이지 스크롤 여부
+
+        Returns:
+            이미지 바이너리 데이터 또는 None (실패 시)
+        """
+        logger.warning("capture_as_pdf() is deprecated, using capture_as_image() instead")
+        return await self.capture_as_image(
+            url=url,
+            wait_time=wait_time,
+            timeout=timeout,
+            scroll=scroll,
+            image_format="png"
+        )
 
     async def _scroll_page(self, page) -> None:
         """
@@ -111,6 +144,45 @@ class PlaywrightCaptureAgent:
         except Exception as e:
             logger.warning(f"Error during page scrolling: {e}")
 
+    async def capture_as_image_bulk(
+        self,
+        urls: list,
+        wait_time: int = 5,
+        timeout: int = 60000,
+        scroll: bool = True,
+        image_format: str = "png"
+    ) -> dict:
+        """
+        여러 URL을 이미지로 캡처
+
+        Args:
+            urls: 캡처할 URL 리스트
+            wait_time: 페이지 로드 후 대기 시간(초)
+            timeout: 페이지 로드 타임아웃(밀리초)
+            scroll: 전체 페이지 스크롤 여부
+            image_format: 이미지 포맷 ('png' 또는 'jpeg')
+
+        Returns:
+            {url: image_bytes} 또는 {url: None} (실패 시)
+        """
+        results = {}
+
+        for url in urls:
+            try:
+                image_bytes = await self.capture_as_image(
+                    url=url,
+                    wait_time=wait_time,
+                    timeout=timeout,
+                    scroll=scroll,
+                    image_format=image_format
+                )
+                results[url] = image_bytes
+            except Exception as e:
+                logger.error(f"Failed to capture {url}: {e}")
+                results[url] = None
+
+        return results
+
     async def capture_as_pdf_bulk(
         self,
         urls: list,
@@ -119,7 +191,9 @@ class PlaywrightCaptureAgent:
         scroll: bool = True
     ) -> dict:
         """
-        여러 URL을 PDF로 캡처
+        (호환성 유지) 여러 URL을 이미지로 캡처
+
+        주의: PDF 대신 이미지로 캡처합니다.
 
         Args:
             urls: 캡처할 URL 리스트
@@ -128,21 +202,13 @@ class PlaywrightCaptureAgent:
             scroll: 전체 페이지 스크롤 여부
 
         Returns:
-            {url: pdf_bytes} 또는 {url: None} (실패 시)
+            {url: image_bytes} 또는 {url: None} (실패 시)
         """
-        results = {}
-
-        for url in urls:
-            try:
-                pdf_bytes = await self.capture_as_pdf(
-                    url=url,
-                    wait_time=wait_time,
-                    timeout=timeout,
-                    scroll=scroll
-                )
-                results[url] = pdf_bytes
-            except Exception as e:
-                logger.error(f"Failed to capture {url}: {e}")
-                results[url] = None
-
-        return results
+        logger.warning("capture_as_pdf_bulk() is deprecated, using capture_as_image_bulk() instead")
+        return await self.capture_as_image_bulk(
+            urls=urls,
+            wait_time=wait_time,
+            timeout=timeout,
+            scroll=scroll,
+            image_format="png"
+        )
