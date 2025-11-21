@@ -156,19 +156,23 @@ class WoowahanCrawler(BaseCrawler):
             logger.error(f"채용공고 링크 추출 실패: {e}")
             return []
 
-    async def parse_job_detail(self, page, url: str, idx: int) -> Optional[Dict[str, Any]]:
+    async def parse_job_detail(self, page, url: str, idx: int, screenshot_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        공고 상세 페이지 파싱 (비동기) - BaseCrawler 인터페이스 구현
+        공고 상세 페이지 파싱 (비동기) - BaseCrawler 인터페이스 구현 (스크린샷 저장 포함)
 
         Args:
             page: Playwright page 객체
             url: 공고 URL
             idx: 인덱스
+            screenshot_dir: 스크린샷 저장 디렉토리
 
         Returns:
             파싱된 공고 데이터 또는 None
         """
         try:
+            # 큰 뷰포트 설정 (오른쪽 잘림 방지)
+            await page.set_viewport_size({"width": 2560, "height": 1440})
+
             logger.info(f"[{idx}] 공고 파싱 중: {url}")
             await page.goto(url, wait_until='domcontentloaded', timeout=self.get_timeout())
 
@@ -327,6 +331,15 @@ class WoowahanCrawler(BaseCrawler):
                 if not matched:
                     logger.debug(f"매핑 안 됨: '{section_title}'")
 
+            # 스크린샷 저장
+            if screenshot_dir:
+                screenshot_path = await self._save_screenshot(
+                    page, job_data, screenshot_dir, idx
+                )
+                if screenshot_path:
+                    job_data["screenshot_path"] = screenshot_path
+                    logger.info(f"[{idx}] 스크린샷 저장: {screenshot_path}")
+
             logger.info(f"파싱 완료: {job_data['title']}")
             return job_data
 
@@ -413,6 +426,50 @@ class WoowahanCrawler(BaseCrawler):
         except Exception as e:
             logger.debug(f"섹션 추출 실패: {e}")
             return sections
+
+    async def _save_screenshot(
+        self, page: Any, job_data: Dict, screenshot_dir: str, idx: int
+    ) -> Optional[str]:
+        """
+        페이지 스크린샷 저장 (우아한형제들 특화 - 넓은 뷰포트)
+
+        Args:
+            page: Playwright page 객체
+            job_data: 공고 데이터
+            screenshot_dir: 저장 디렉토리
+            idx: 인덱스
+
+        Returns:
+            저장된 스크린샷 경로 또는 None
+        """
+        try:
+            # 저장 디렉토리 생성 (os는 _normalize_url에서 import됨)
+            import os
+            os.makedirs(screenshot_dir, exist_ok=True)
+
+            # 파일명 생성 (job_id + 제목) - 특수문자 제거
+            job_id = job_data.get("job_id", f"job_{idx}")
+            title = job_data.get("title", "Unknown")
+            # Windows 파일명 특수문자 제거 (< > : " / \ | ? *)
+            safe_title = title.replace("/", "_").replace("\\", "_").replace(":", "_").replace("<", "_").replace(">", "_").replace("|", "_").replace("?", "_").replace("*", "_").replace("\"", "_")[:50]
+            filename = f"{job_id}_{safe_title}_screenshot.png"
+            filepath = os.path.join(screenshot_dir, filename)
+
+            # 전체 페이지 스크린샷 캡처 (2560x1440 뷰포트에서)
+            screenshot_bytes = await page.screenshot(
+                full_page=True,
+                type="png"
+            )
+
+            # 파일 저장
+            with open(filepath, "wb") as f:
+                f.write(screenshot_bytes)
+
+            return filepath
+
+        except Exception as e:
+            logger.warning(f"[{idx}] 스크린샷 저장 실패: {e}")
+            return None
 
     def _extract_job_id(self, url: str) -> str:
         """URL에서 공고 ID 추출"""

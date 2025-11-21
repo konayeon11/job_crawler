@@ -4,7 +4,7 @@
 특징:
 - 완전 비동기 처리
 - 이미지 캡처 지원 (PNG/JPEG)
-- HTML, 벡터 임베딩, JSON 메타데이터 저장
+- HTML, 스크린샷 저장
 - 동시 처리로 성능 최적화
 """
 
@@ -75,7 +75,7 @@ class AsyncPlaywrightOrchestrator:
     2. 개별 공고 URL 추출
     3. 각 공고 상세 정보 파싱 (병렬 처리)
     4. 이미지 캡처 - PNG 포맷 (병렬 처리)
-    5. 저장소에 저장 (HTML + JSON 메타데이터 + PNG 이미지)
+    5. 저장소에 저장 (HTML + PNG 이미지만 저장, 메타데이터 제외)
     """
 
     def __init__(
@@ -333,16 +333,7 @@ class AsyncPlaywrightOrchestrator:
                         subfolder,
                     )
 
-                    # 2. JSON 메타데이터 저장
-                    json_path = await asyncio.to_thread(
-                        self._save_json_metadata,
-                        job,
-                        company,
-                        job.job_id,
-                        subfolder,
-                    )
-
-                    # 3. 스크린샷 저장 (parse_job_detail에서 제공된 경우)
+                    # 2. 스크린샷 저장 (parse_job_detail에서 제공된 경우)
                     screenshot_path = None
                     if job.screenshot_bytes:
                         screenshot_path = await asyncio.to_thread(
@@ -380,7 +371,6 @@ class AsyncPlaywrightOrchestrator:
                         "job_id": job.job_id,
                         "title": job.title,
                         "html_path": html_path,
-                        "json_path": json_path,
                         "screenshot_path": screenshot_path,
                     }
 

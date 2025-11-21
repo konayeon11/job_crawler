@@ -29,17 +29,20 @@ class LGCrawler(BaseCrawler):
         채용 목록 페이지 URL 리스트 반환
 
         Returns:
-            LG CNS 채용공고 URL 리스트
+            LG 채용공고 기본 페이지 URL (체크박스로 필터 적용)
         """
         return [
-            "https://careers.lg.com/apply?c=CNS",
+            "https://careers.lg.com/apply",  # 기본 페이지 (체크박스로 LG CNS 필터 적용)
         ]
 
     async def extract_job_urls(self, page: Any) -> List[Dict[str, str]]:
         """
         채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기)
 
-        React 기반 SPA이므로 공고 제목 텍스트로 요소를 찾고 클릭하여 상세 페이지 URL 수집
+        React 기반 SPA이므로:
+        1. 회사 필터 토글 열기
+        2. LG CNS 선택
+        3. 필터링된 공고들의 URL 추출
 
         Args:
             page: Playwright page 객체
@@ -48,7 +51,7 @@ class LGCrawler(BaseCrawler):
             [{'url': '...', 'job_id': '...', 'title': '...'}] 형식의 리스트
         """
         try:
-            logger.info("LG 채용공고 링크 추출 중...")
+            logger.info("LG CNS 채용공고 링크 추출 중...")
 
             # 채용 목록 페이지 로드
             list_url = self.get_job_list_urls()[0]
@@ -59,10 +62,45 @@ class LGCrawler(BaseCrawler):
             # 페이지 렌더링 대기
             await asyncio.sleep(2)
 
-            # [LG CNS] 텍스트를 포함하는 공고 요소 찾기
+            # Step 1: LG CNS 체크박스 찾아서 클릭
+            logger.info("LG CNS 체크박스 클릭 시도...")
+            try:
+                # 페이지의 모든 체크박스 찾기
+                checkboxes = await page.locator('input[type="checkbox"]').all()
+                logger.info(f"발견된 체크박스: {len(checkboxes)}개")
+
+                cns_checkbox = None
+
+                # 각 체크박스 확인
+                for idx, checkbox in enumerate(checkboxes):
+                    try:
+                        # 체크박스의 부모 요소 확인
+                        label = checkbox.locator("xpath=ancestor::label | ancestor::*[contains(@class, 'FormControlLabel')]").first
+
+                        # 라벨 텍스트 확인
+                        label_text = await label.inner_text()
+                        if "LG CNS" in label_text:
+                            cns_checkbox = checkbox
+                            logger.info(f"LG CNS 체크박스 발견 (인덱스: {idx})")
+                            break
+                    except:
+                        pass
+
+                if cns_checkbox:
+                    # 체크박스 클릭
+                    await cns_checkbox.click(timeout=5000)
+                    await asyncio.sleep(2)  # 필터링 적용 대기
+                    logger.info("LG CNS 체크박스 클릭 완료 - 필터링 적용됨")
+                else:
+                    logger.warning("LG CNS 체크박스를 찾을 수 없음 - 모든 공고 표시 상태")
+
+            except Exception as e:
+                logger.warning(f"LG CNS 체크박스 클릭 실패: {e}")
+
+            # Step 2: LG CNS 공고 찾기 (체크박스 클릭 후)
             job_links = []
             try:
-                # [LG CNS] 텍스트를 포함하는 모든 요소 찾기
+                # LG CNS 공고 요소 찾기 ([LG CNS] 텍스트 포함)
                 job_elements = await page.locator('text=/\\[LG CNS\\]/').all()
                 logger.info(f"[LG CNS] 공고 요소 발견: {len(job_elements)}개")
 

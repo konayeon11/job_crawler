@@ -21,7 +21,7 @@ class CrawlerRegistry:
         if company_name in self._crawlers:
             raise ValueError(f"Crawler for '{company_name}' is already registered")
         self._crawlers[company_name] = crawler
-        print(f"✓ Registered crawler for: {company_name}")
+        print(f"[OK] Registered crawler for: {company_name}")
 
     def get_crawler(self, company_name: str) -> Optional[BaseCrawler]:
         """

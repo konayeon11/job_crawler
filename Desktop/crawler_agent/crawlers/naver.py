@@ -1,7 +1,7 @@
 import asyncio
 import logging
-import re
 from typing import List, Dict, Optional, Any
+from bs4 import BeautifulSoup
 from .base_crawler import BaseCrawler
 
 logger = logging.getLogger(__name__)
@@ -11,7 +11,8 @@ class NaverCrawler(BaseCrawler):
     """
     네이버 채용 공고 크롤러 (Playwright 기반)
 
-    네이버 채용 공고를 크롤링합니다.
+    네이버 채용공고 페이지에서 모든 공고를 무한 스크롤로 수집합니다.
+    https://recruit.navercorp.com/rcrt/list.do
     """
 
     def get_company_name(self) -> str:
@@ -26,12 +27,12 @@ class NaverCrawler(BaseCrawler):
             네이버 채용공고 URL 리스트
         """
         return [
-            "https://recruit.naver.com/rcrt/list.do",
+            "https://recruit.navercorp.com/rcrt/list.do",
         ]
 
     async def extract_job_urls(self, page: Any) -> List[Dict[str, str]]:
         """
-        채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기)
+        현재 페이지에서 모든 공고 URL 추출 (무한 스크롤 처리)
 
         Args:
             page: Playwright page 객체
@@ -40,98 +41,142 @@ class NaverCrawler(BaseCrawler):
             [{'url': '...', 'job_id': '...', 'title': '...'}] 형식의 리스트
         """
         try:
-            logger.info("네이버 메인 페이지 로딩 중...")
-            await page.goto(
-                self.get_job_list_urls()[0],
-                wait_until='domcontentloaded',
-                timeout=self.get_timeout()
-            )
+            logger.info("네이버 채용공고 링크 추출 중 (무한 스크롤)...")
+            
+            # 페이지 네비게이션
+            urls = self.get_job_list_urls()
+            base_url = urls[0]
+            logger.info(f"네이버 채용 페이지 로딩: {base_url}")
+            await page.goto(base_url, wait_until="networkidle", timeout=self.get_timeout())
+            await asyncio.sleep(3)  # 초기 로딩 대기
 
-            # JavaScript 실행 대기
-            logger.info("JavaScript 실행 대기 중...")
-            await asyncio.sleep(2)
+            # 무한 스크롤로 모든 공고 로드
+            previous_count = 0
+            max_attempts = 50  # 무한 루프 방지
+            attempts = 0
 
-            # 채용공고 링크 추출
-            logger.info("채용공고 링크 추출 중...")
-            job_links = []
+            while attempts < max_attempts:
+                # 현재 공고 개수 확인
+                current_count = await page.locator("li.card_item").count()
 
-            try:
-                # 네이버 채용공고 URL 패턴 찾기
-                result = await page.evaluate("""
-                    () => {
-                        const links = [];
-                        // 네이버 채용 링크: /rcrt/view.do 또는 /rcrt/detail.do
-                        document.querySelectorAll('a[href]').forEach(a => {
-                            const href = a.getAttribute('href');
-                            if (href && (href.includes('/rcrt/view.do') || href.includes('/rcrt/detail.do'))) {
-                                links.push(href);
-                            }
-                        });
-                        // 중복 제거
-                        return [...new Set(links)];
-                    }
-                """)
+                if current_count == previous_count:
+                    # 더 이상 새 공고가 없으면 종료
+                    logger.info(f"스크롤 완료 (현재 {current_count}개 공고)")
+                    break
 
-                for href in result:
-                    try:
-                        full_url = self._normalize_url(href)
-                        if full_url not in job_links:
-                            job_links.append(full_url)
-                    except Exception:
-                        continue
+                if current_count > previous_count:
+                    logger.info(f"현재 {current_count}개 공고 로드됨...")
+                    attempts = 0  # 새 공고가 로드되면 카운터 리셋
+                else:
+                    attempts += 1
 
-                logger.info(f"총 {len(job_links)}개의 채용공고 링크 추출")
+                previous_count = current_count
 
-            except Exception as e:
-                logger.warning(f"JavaScript 실행 실패: {e}")
-                # Fallback: CSS 선택자로 링크 추출
+                # 페이지 끝까지 스크롤
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(2000)
+                await asyncio.sleep(1.5)
+
+            # 모든 공고 카드에서 annoId와 제목 추출
+            logger.info("공고 정보 수집 중...")
+            job_cards = await page.locator("li.card_item").all()
+            logger.info(f"총 {len(job_cards)}개 카드 발견")
+
+            job_urls = []
+
+            for idx, card in enumerate(job_cards, 1):
                 try:
-                    job_elements = await page.query_selector_all('a[href*="/rcrt/view.do"], a[href*="/rcrt/detail.do"]')
-                    for elem in job_elements:
-                        href = await elem.get_attribute('href')
-                        if href:
-                            try:
-                                full_url = self._normalize_url(href)
-                                if full_url not in job_links:
-                                    job_links.append(full_url)
-                            except Exception:
-                                continue
-                except Exception as fallback_error:
-                    logger.error(f"CSS 선택자 방식도 실패: {fallback_error}")
+                    # 제목 추출
+                    try:
+                        title_elem = card.locator("h4.card_title").first
+                        title_count = await title_elem.count()
+                        if title_count > 0:
+                            title = await title_elem.inner_text(timeout=2000)
+                            title = title.strip()
+                        else:
+                            title = f"unknown_{idx}"
+                    except:
+                        title = f"unknown_{idx}"
 
-            return [
-                {
-                    "url": link,
-                    "job_id": self._extract_job_id(link),
-                    "title": ""
-                }
-                for link in job_links
-            ]
+                    # annoId 추출
+                    anno_id = ""
+                    try:
+                        # 방법 1: onclick 속성에서 추출
+                        onclick_attr = await card.get_attribute("onclick")
+                        if onclick_attr and "show(" in onclick_attr:
+                            anno_id = onclick_attr.split("show(")[1].split(")")[0].strip("'\"")
+                    except:
+                        pass
+
+                    if not anno_id:
+                        try:
+                            # 방법 2: a 태그의 onclick에서 추출
+                            link = card.locator("a").first
+                            link_count = await link.count()
+                            if link_count > 0:
+                                onclick_attr = await link.get_attribute("onclick")
+                                if onclick_attr and "show(" in onclick_attr:
+                                    anno_id = onclick_attr.split("show(")[1].split(")")[0].strip("'\"")
+                        except:
+                            pass
+
+                    if not anno_id:
+                        try:
+                            # 방법 3: data 속성에서 추출
+                            anno_id = await card.get_attribute("data-annoid")
+                            if not anno_id:
+                                anno_id = await card.get_attribute("data-id")
+                        except:
+                            pass
+
+                    if anno_id:
+                        # URL 구성
+                        detail_url = f"https://recruit.navercorp.com/rcrt/view.do?annoId={anno_id}"
+                        job_urls.append({
+                            "url": detail_url,
+                            "job_id": self._extract_job_id(detail_url),
+                            "title": title
+                        })
+                        logger.debug(f"[{idx}/{len(job_cards)}] {title[:40]}... (annoId: {anno_id})")
+
+                except Exception as e:
+                    logger.warning(f"카드 처리 실패 [{idx}/{len(job_cards)}]: {e}")
+                    continue
+
+            logger.info(f"총 {len(job_urls)}개 공고 URL 추출 완료")
+            return job_urls
 
         except Exception as e:
-            logger.error(f"채용공고 링크 추출 실패: {e}")
+            logger.error(f"공고 URL 추출 실패: {e}", exc_info=True)
             return []
 
-    async def parse_job_detail(self, page: Any, url: str, idx: int) -> Optional[Dict[str, Any]]:
+    def _extract_job_id(self, url: str) -> str:
         """
-        공고 상세 페이지 파싱 (비동기)
+        URL에서 job_id 추출
 
         Args:
-            page: Playwright page 객체
             url: 공고 URL
-            idx: 인덱스
 
         Returns:
-            파싱된 공고 데이터 또는 None
+            job_id (annoId)
         """
         try:
-            logger.info(f"[{idx}] 공고 파싱 중: {url}")
-            await page.goto(url, wait_until='domcontentloaded', timeout=self.get_timeout())
+            if "annoId=" in url:
+                anno_id = url.split("annoId=")[1].split("&")[0]
+                return f"naver_{anno_id}"
+            return f"naver_{hash(url) % 100000}"
+        except:
+            return f"naver_{hash(url) % 100000}"
 
-            # JavaScript 로드 대기
+
+    async def parse_job_detail(self, page, url: str, idx: int):
+        """공고 상세 페이지 파싱"""
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=self.get_timeout())
             await asyncio.sleep(self.get_wait_time())
-
-            job_data = {
+            
+            html = await page.content()
+            return {
                 "url": url,
                 "job_id": self._extract_job_id(url),
                 "company": self.get_company_name(),
@@ -146,119 +191,19 @@ class NaverCrawler(BaseCrawler):
                 "team_description": "",
                 "selection_process": "",
                 "notes": "",
+                "html_content": html,
                 "metadata": {
                     "crawled_at": asyncio.get_event_loop().time(),
                     "wait_time": self.get_wait_time(),
                 }
             }
-
-            # JavaScript로 페이지 데이터 추출
-            try:
-                result = await page.evaluate("""
-                    () => {
-                        const data = {};
-
-                        // 제목 추출
-                        const titleEl = document.querySelector('h1, [class*="title"]');
-                        if (titleEl) {
-                            data.title = titleEl.textContent.trim().substring(0, 200);
-                        }
-
-                        // 본문 추출
-                        const contentEl = document.querySelector('[class*="content"], [class*="description"], .section_bottom, main');
-                        if (contentEl) {
-                            data.jobDescription = contentEl.textContent.trim().substring(0, 5000);
-                        }
-
-                        // 필수 자격 추출
-                        const qualEl = document.querySelector('[class*="qual"], [class*="requirement"]');
-                        if (qualEl) {
-                            data.requiredQualifications = qualEl.textContent.trim().substring(0, 2000);
-                        }
-
-                        return data;
-                    }
-                """)
-
-                job_data.update({k: v for k, v in result.items() if v})
-
-            except Exception as e:
-                logger.warning(f"JavaScript 파싱 실패 ({url}): {e}")
-
-            # HTML 원본 저장
-            job_data["html"] = await page.content()
-
-            logger.info(f"[{idx}] 공고 파싱 완료: {job_data.get('title', 'Unknown')}")
-            return job_data
-
         except Exception as e:
-            logger.error(f"공고 상세 파싱 실패 ({url}): {e}")
             return None
 
     def get_wait_time(self) -> int:
-        """
-        PDF 캡처 대기 시간(초)
-
-        네이버는 비교적 빠르게 로드됨
-        """
+        """PDF 캡처 대기 시간(초)"""
         return 3
 
     def requires_selenium(self) -> bool:
-        """
-        동적 페이지 여부
-
-        네이버는 Playwright로 처리됨
-        """
+        """Selenium 사용 여부"""
         return False
-
-    def requires_playwright(self) -> bool:
-        """
-        Playwright 사용 여부
-
-        네이버는 Playwright 필요
-        """
-        return True
-
-    def get_max_concurrent_jobs(self) -> int:
-        """동시 처리 공고 수"""
-        return 3
-
-    def get_timeout(self) -> int:
-        """타임아웃 시간(밀리초)"""
-        return 30000
-
-    def _normalize_url(self, href: str) -> str:
-        """
-        상대 URL을 절대 URL로 변환
-
-        Args:
-            href: 상대 또는 절대 URL
-
-        Returns:
-            절대 URL
-        """
-        if href.startswith("http"):
-            return href
-        elif href.startswith("/"):
-            return "https://recruit.naver.com" + href
-        else:
-            return "https://recruit.naver.com/" + href
-
-    def _extract_job_id(self, url: str) -> str:
-        """
-        URL에서 job_id 추출
-
-        Args:
-            url: 공고 URL
-
-        Returns:
-            job_id 문자열
-        """
-        # recruitSeq 파라미터 추출
-        match = re.search(r'recruitSeq=(\d+)', url)
-        if match:
-            return f"naver_{match.group(1)}"
-
-        # URL 경로에서 마지막 부분 사용
-        job_id = url.rstrip('/').split('/')[-1]
-        return f"naver_{job_id}" if job_id else "naver_unknown"

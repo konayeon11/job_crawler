@@ -129,292 +129,50 @@ class TossCrawler(BaseCrawler):
                             logger.info(f"  계열사 수: {num_affiliates}개")
 
                             if num_affiliates > 1:
-                                # 여러 계열사 = 토글 및 공고보기 버튼 필요
-                                logger.info(f"  다중 계열사 포지션 - 토글 펼치기 시작...")
+                                # 여러 계열사 = 계열사 배지 직접 클릭
+                                logger.info(f"  다중 계열사 포지션 - 계열사 배지 클릭 시작...")
 
-                                # Step 1: JavaScript로 DOM 구조 분석해서 토글과 섹션 찾기
-                                try:
-                                    dom_info = await item.evaluate("""(element) => {
-                                        const toggles = [];
-                                        const sections = [];
+                                # 계열사 배지 찾기
+                                badges = await item.locator('span[class*="zmjrej"]').all()
+                                logger.info(f"  발견된 계열사 배지: {len(badges)}개")
 
-                                        // 토글 찾기 (여러 가지 선택자 시도)
-                                        const toggleSelectors = [
-                                            'div[class*="css-15dn0i8"]',
-                                            'button[aria-expanded]',
-                                            'div[role="button"]',
-                                            'div[class*="toggle"]'
-                                        ];
-
-                                        for (const selector of toggleSelectors) {
-                                            const found = element.querySelectorAll(selector);
-                                            if (found.length > 0) {
-                                                toggles.push({
-                                                    selector: selector,
-                                                    count: found.length,
-                                                    elements: Array.from(found).map(el => ({
-                                                        text: el.textContent.substring(0, 30),
-                                                        class: el.className
-                                                    }))
-                                                });
-                                                break;
-                                            }
-                                        }
-
-                                        // 포지션 섹션 찾기 (여러 가지 선택자 시도)
-                                        const sectionSelectors = [
-                                            'div[class*="css-101drag"]',
-                                            'div[class*="accordion"]',
-                                            'div[role="region"]',
-                                            'div[class*="section"]'
-                                        ];
-
-                                        for (const selector of sectionSelectors) {
-                                            const found = element.querySelectorAll(selector);
-                                            if (found.length > 0) {
-                                                sections.push({
-                                                    selector: selector,
-                                                    count: found.length,
-                                                    elements: Array.from(found).slice(0, 3).map(el => ({
-                                                        text: el.textContent.substring(0, 50),
-                                                        class: el.className
-                                                    }))
-                                                });
-                                                break;
-                                            }
-                                        }
-
-                                        return { toggles, sections };
-                                    }""")
-
-                                    logger.info(f"  DOM 분석 결과: {dom_info}")
-                                except Exception as e:
-                                    logger.warning(f"  DOM 분석 실패: {e}")
-                                    dom_info = {"toggles": [], "sections": []}
-
-                                # Step 2: 토글 찾기 (여러 선택자 시도)
-                                toggles = []
-                                toggle_selectors = [
-                                    "div.css-15dn0i8.em74uf22",  # 원래 선택자
-                                    "div[class*='css-15dn0i8']",  # 부분 매칭
-                                    "button[aria-expanded]",      # aria-expanded 속성
-                                    "div[role='button'][class*='toggle']"  # role과 class 조합
-                                ]
-
-                                for selector in toggle_selectors:
+                                # 각 배지를 클릭하여 상세 페이지 접근
+                                for badge_idx, badge in enumerate(badges):
                                     try:
-                                        toggles = await item.locator(selector).all()
-                                        if toggles:
-                                            logger.info(f"  토글 발견 (선택자: {selector}): {len(toggles)}개")
-                                            break
-                                    except:
-                                        continue
+                                        # 배지 텍스트 (계열사명) 추출
+                                        affiliate_name = await badge.text_content()
+                                        logger.info(f"    [{badge_idx}] {affiliate_name} 배지 클릭...")
 
-                                logger.info(f"  최종 발견된 토글: {len(toggles)}개")
+                                        # 배지 클릭 (새 탭 또는 페이지 네비게이션 발생)
+                                        await badge.click(delay=100)
+                                        await asyncio.sleep(2)
 
-                                # Step 3: 토글 클릭
-                                for toggle_idx, toggle in enumerate(toggles):
-                                    try:
-                                        # 토글 버튼 클릭 (펼치기)
-                                        await toggle.click()
-                                        await asyncio.sleep(0.5)
-                                        logger.info(f"    토글 {toggle_idx + 1} 펼침")
-                                    except Exception as e:
-                                        logger.warning(f"    토글 {toggle_idx + 1} 클릭 실패: {e}")
-                                        continue
+                                        # 현재 URL 확인
+                                        current_url = page.url
+                                        logger.info(f"    클릭 후 URL: {current_url}")
 
-                                # Step 4: 모든 토글이 펼쳐진 후 포지션 선택 섹션 찾기
-                                await asyncio.sleep(1)
+                                        # job-detail 페이지인 경우 URL 추출
+                                        if 'job-detail' in current_url:
+                                            match = re.search(r'job_id=([^&]+)', current_url)
+                                            if match:
+                                                job_id = match.group(1)
+                                                if current_url not in seen_urls:
+                                                    job_links.append({
+                                                        'url': current_url,
+                                                        'job_id': job_id,
+                                                        'title': f"{pos_title}[{affiliate_name}]"
+                                                    })
+                                                    seen_urls.add(current_url)
+                                                    logger.info(f"      [추가] {pos_title}[{affiliate_name}] -> {job_id}")
 
-                                # 포지션 선택 섹션 찾기 (여러 선택자 시도)
-                                position_sections = []
-                                section_selectors = [
-                                    "div.css-101drag.em74uf20",  # 원래 선택자
-                                    "div[class*='css-101drag']",  # 부분 매칭
-                                    "div[role='region']",         # role
-                                    "div[class*='accordion']"     # accordion
-                                ]
-
-                                for selector in section_selectors:
-                                    try:
-                                        position_sections = await item.locator(selector).all()
-                                        if position_sections:
-                                            logger.info(f"  포지션 섹션 발견 (선택자: {selector}): {len(position_sections)}개")
-                                            break
-                                    except:
-                                        continue
-
-                                logger.info(f"  최종 발견된 포지션 선택 섹션: {len(position_sections)}개")
-
-                                # 각 계열사별 포지션 선택 섹션 처리
-                                for sect_idx, section in enumerate(position_sections):
-                                    try:
-                                        logger.info(f"    섹션 {sect_idx + 1} 처리...")
-
-                                        # JavaScript로 섹션 내 포지션 요소 분석
-                                        try:
-                                            section_info = await section.evaluate("""(element) => {
-                                                // 포지션 div 찾기 (여러 가지 선택자 시도)
-                                                const posSelectors = [
-                                                    "div[class*='css-1pheyry']",
-                                                    "div[class*='css-1m33twj']",
-                                                    "div[role='button']",
-                                                    "div[class*='position']"
-                                                ];
-
-                                                for (const selector of posSelectors) {
-                                                    const found = element.querySelectorAll(selector);
-                                                    if (found.length > 0) {
-                                                        return {
-                                                            selector: selector,
-                                                            count: found.length,
-                                                            elements: Array.from(found).slice(0, 5).map(el => ({
-                                                                text: el.textContent.substring(0, 40),
-                                                                class: el.className
-                                                            }))
-                                                        };
-                                                    }
-                                                }
-                                                return { selector: 'not found', count: 0, elements: [] };
-                                            }""")
-                                            logger.info(f"      섹션 내 요소 분석: {section_info}")
-                                        except Exception as e:
-                                            logger.warning(f"      섹션 분석 실패: {e}")
-                                            section_info = {"count": 0}
-
-                                        # 섹션 내 선택 가능한 포지션들 찾기 (여러 선택자 시도)
-                                        position_divs = []
-                                        position_selectors = [
-                                            "div[class*='css-1pheyry']",  # 원래 선택자
-                                            "div[class*='css-1m33twj']",  # 원래 선택자 (선택됨)
-                                            "div[role='button']",          # role 기반
-                                            "div[class*='position']"       # 일반적인 class
-                                        ]
-
-                                        for selector in position_selectors:
-                                            try:
-                                                position_divs = await section.locator(selector).all()
-                                                if position_divs:
-                                                    logger.info(f"      포지션 발견 (선택자: {selector}): {len(position_divs)}개")
-                                                    break
-                                            except:
-                                                continue
-
-                                        logger.info(f"      최종 발견된 포지션: {len(position_divs)}개")
-
-                                        # 각 포지션을 하나씩 선택하고 공고보기 클릭
-                                        for pos_div_idx, pos_div in enumerate(position_divs):
-                                            try:
-                                                # 포지션 텍스트 추출
-                                                pos_text = ""
-                                                try:
-                                                    pos_text = await pos_div.inner_text()
-                                                except:
-                                                    pos_text = f"Position {pos_div_idx}"
-
-                                                logger.info(f"        포지션 {pos_div_idx + 1} 선택: {pos_text[:30]}")
-
-                                                # 포지션 클릭 (선택)
-                                                await pos_div.click()
-                                                await asyncio.sleep(0.8)
-
-                                                # 공고보기 버튼 찾기 (여러 선택자 시도)
-                                                view_buttons = []
-                                                button_selectors = [
-                                                    "button:has-text('공고보기')",  # 원래 선택자
-                                                    "button:has-text('자세히보기')",  # 대체 텍스트
-                                                    "button[class*='job']",  # job 클래스
-                                                    "button[class*='view']",  # view 클래스
-                                                    "a[href*='job-detail']"  # 직접 링크
-                                                ]
-
-                                                for selector in button_selectors:
-                                                    try:
-                                                        view_buttons = await section.locator(selector).all()
-                                                        if view_buttons:
-                                                            logger.info(f"          공고보기 버튼 발견 (선택자: {selector}): {len(view_buttons)}개")
-                                                            break
-                                                    except:
-                                                        continue
-
-                                                logger.info(f"          최종 발견된 공고보기 버튼: {len(view_buttons)}개")
-
-                                                # 각 공고보기 버튼 클릭
-                                                for btn_idx, btn in enumerate(view_buttons):
-                                                    try:
-                                                        logger.info(f"          공고보기 버튼 {btn_idx + 1} 클릭...")
-
-                                                        # 버튼의 부모 요소에서 링크 먼저 찾기
-                                                        try:
-                                                            parent = btn.locator("xpath=ancestor::*[1]")
-                                                            links_in_parent = await parent.locator("a[href*='job-detail']").all()
-
-                                                            if links_in_parent:
-                                                                for link in links_in_parent:
-                                                                    try:
-                                                                        href = await link.get_attribute('href')
-                                                                        if href and 'job-detail' in href and href not in seen_urls:
-                                                                            # URL 정규화
-                                                                            if href.startswith('/'):
-                                                                                href = "https://toss.im" + href
-
-                                                                            # job_id 추출
-                                                                            match = re.search(r'job_id=([^&]+)', href)
-                                                                            if match:
-                                                                                job_id = match.group(1)
-                                                                                job_links.append({
-                                                                                    'url': href,
-                                                                                    'job_id': job_id,
-                                                                                    'title': pos_title.strip()
-                                                                                })
-                                                                                seen_urls.add(href)
-                                                                                logger.info(f"            [발견] {pos_title[:35]} -> {job_id}")
-                                                                    except Exception as e:
-                                                                        logger.debug(f"링크 처리 중 오류: {e}")
-                                                                        continue
-                                                            else:
-                                                                # 부모에서 못 찾으면 버튼 클릭해서 페이지 이동
-                                                                logger.info(f"            버튼 클릭...")
-                                                                try:
-                                                                    await btn.click(timeout=5000)
-                                                                    await asyncio.sleep(1)
-
-                                                                    # 페이지 URL이 변경되었는지 확인
-                                                                    current_url = page.url
-                                                                    if 'job-detail' in current_url:
-                                                                        match = re.search(r'job_id=([^&]+)', current_url)
-                                                                        if match:
-                                                                            job_id = match.group(1)
-                                                                            if current_url not in seen_urls:
-                                                                                job_links.append({
-                                                                                    'url': current_url,
-                                                                                    'job_id': job_id,
-                                                                                    'title': pos_title.strip()
-                                                                                })
-                                                                                seen_urls.add(current_url)
-                                                                                logger.info(f"            [발견] {pos_title[:35]} -> {job_id}")
-
-                                                                        # 목록으로 돌아가기
-                                                                        await page.go_back()
-                                                                        await asyncio.sleep(1)
-                                                                except Exception as e:
-                                                                    logger.warning(f"            버튼 클릭 중 오류: {e}")
-
-                                                        except Exception as e:
-                                                            logger.warning(f"          URL 추출 중 오류: {e}")
-                                                            continue
-
-                                                    except Exception as e:
-                                                        logger.warning(f"          공고보기 버튼 처리 중 오류: {e}")
-                                                        continue
-
-                                            except Exception as e:
-                                                logger.warning(f"        포지션 {pos_div_idx + 1} 처리 중 오류: {e}")
-                                                continue
+                                                # 목록으로 돌아가기
+                                                await page.go_back()
+                                                await asyncio.sleep(2)
+                                        else:
+                                            logger.warning(f"    배지 클릭 후 job-detail 페이지로 이동하지 않음")
 
                                     except Exception as e:
-                                        logger.warning(f"    섹션 {sect_idx + 1} 처리 중 오류: {e}")
-                                        continue
+                                        logger.warning(f"    배지 {badge_idx} 처리 중 오류: {e}")
 
                             else:
                                 # 단일 계열사 = 직접 li 클릭해서 세부공고 페이지 진입
@@ -629,7 +387,11 @@ class TossCrawler(BaseCrawler):
             if is_detail_page:
                 try:
                     await asyncio.sleep(1)
-                    screenshot_bytes = await page.screenshot(full_page=False, timeout=60000)
+                    # 전체 페이지가 보이도록 스크롤 맨 위로 이동
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await asyncio.sleep(0.5)
+                    # 전체 페이지 캡처 (full_page=True)
+                    screenshot_bytes = await page.screenshot(full_page=True, timeout=60000)
                     logger.info(f"[{idx}] 스크린샷 캡처 완료 ({len(screenshot_bytes)} bytes)")
                 except Exception as e:
                     logger.warning(f"[{idx}] 스크린샷 캡처 실패: {e}")

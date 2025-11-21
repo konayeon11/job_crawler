@@ -1,9 +1,12 @@
 import asyncio
 import logging
 import re
+import random
+import os
 from typing import List, Dict, Optional, Any
 from bs4 import BeautifulSoup
 from .base_crawler import BaseCrawler
+from agents.playwright_capture import PlaywrightCaptureAgent
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +36,7 @@ class CoupangCrawler(BaseCrawler):
 
     async def extract_job_urls(self, page: Any) -> List[Dict[str, str]]:
         """
-        채용공고 목록 페이지에서 개별 공고 URL 추출 (비동기)
-
-        페이지네이션을 통해 모든 공고를 수집
+        현재 페이지에서만 공고 URL 추출 (페이지네이션은 orchestrator에서 처리)
 
         Args:
             page: Playwright page 객체
@@ -44,92 +45,31 @@ class CoupangCrawler(BaseCrawler):
             [{'url': '...', 'job_id': '...', 'title': '...'}] 형식의 리스트
         """
         try:
-            logger.info("쿠팡 채용공고 링크 추출 중 (페이지네이션)...")
+            logger.info("쿠팡 채용공고 링크 추출 중 (현재 페이지만)...")
 
-            # Playwright로 페이지 로드
-            await page.goto(
-                self.get_job_list_urls()[0],
-                wait_until='domcontentloaded',
-                timeout=self.get_timeout()
-            )
+            # 페이지가 이미 로드되었다고 가정하고, 렌더링 대기만 수행
+            # (orchestrator에서 page.goto()를 호출함)
+            await asyncio.sleep(1)
 
-            # 페이지 렌더링 대기
-            await asyncio.sleep(2)
-
-            # 페이지에서 총 공고 수 추출 및 페이지 수 계산
-            page_info = await page.evaluate("""
+            # 현재 페이지의 gh_jid 링크만 추출
+            current_links = await page.evaluate("""
                 () => {
-                    const text = document.body.innerText;
-                    // "20 건 확인 중, 총 776건의 결과" 형식에서 추출
-                    const match = text.match(/총\\s*(\\d+)건/);
-                    const totalJobs = match ? parseInt(match[1]) : 0;
-
-                    // 페이지당 20개씩
-                    const pageSize = 20;
-                    const totalPages = Math.ceil(totalJobs / pageSize);
-
-                    return {
-                        totalJobs: totalJobs,
-                        pageSize: pageSize,
-                        totalPages: totalPages
-                    };
+                    const links = new Set();
+                    document.querySelectorAll('a[href*="/jobs/"][href*="gh_jid="]').forEach(a => {
+                        const href = a.getAttribute('href');
+                        if (href && href.includes('gh_jid=')) {
+                            links.add(href);
+                        }
+                    });
+                    return Array.from(links);
                 }
             """)
 
-            total_jobs = page_info.get('totalJobs', 0)
-            total_pages = page_info.get('totalPages', 1)
-
-            logger.info(f"총 공고 수: {total_jobs}개 (예상 페이지: {total_pages}개)")
-
-            # 모든 공고 링크 수집 (페이지네이션)
-            job_links = set()
-            current_page = 1
-
-            logger.info(f"페이지네이션 수집 시작 (총 {total_pages}페이지, {total_jobs}개 공고)...")
-
-            while current_page <= total_pages:
-                # 현재 페이지의 모든 gh_jid 링크 추출
-                current_links = await page.evaluate("""
-                    () => {
-                        const links = new Set();
-                        document.querySelectorAll('a[href*="/jobs/"][href*="gh_jid="]').forEach(a => {
-                            const href = a.getAttribute('href');
-                            if (href && href.includes('gh_jid=')) {
-                                links.add(href);
-                            }
-                        });
-                        return Array.from(links);
-                    }
-                """)
-
-                job_links.update(current_links)
-                current_count = len(job_links)
-
-                logger.info(f"[페이지 {current_page}/{total_pages}] 수집된 링크: {current_count}개")
-
-                # 마지막 페이지이면 종료
-                if current_page >= total_pages:
-                    logger.info("모든 페이지 수집 완료.")
-                    break
-
-                # 다음 페이지로 이동
-                try:
-                    # 페이지 번호 이동 - URL을 직접 변경하는 방식
-                    next_page_url = f"{self.get_job_list_urls()[0]}?page={current_page + 1}"
-                    await page.goto(next_page_url, wait_until='domcontentloaded', timeout=self.get_timeout())
-                    await asyncio.sleep(1)  # 페이지 로드 대기 (1초로 단축)
-
-                except Exception as e:
-                    logger.warning(f"다음 페이지로 이동 실패: {e}. 수집 종료.")
-                    break
-
-                current_page += 1
-
-            logger.info(f"총 {len(job_links)}개의 채용공고 링크 추출 완료")
+            logger.info(f"현재 페이지에서 {len(current_links)}개의 링크 추출")
 
             # URL 정규화
             normalized_links = []
-            for link in job_links:
+            for link in current_links:
                 try:
                     full_url = self._normalize_url(link)
                     normalized_links.append(full_url)
@@ -149,24 +89,40 @@ class CoupangCrawler(BaseCrawler):
             logger.error(f"채용공고 링크 추출 실패: {e}")
             return []
 
-    async def parse_job_detail(self, page: Any, url: str, idx: int) -> Optional[Dict[str, Any]]:
+    async def parse_job_detail(self, page: Any, url: str, idx: int, screenshot_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        공고 상세 페이지 파싱 (비동기)
+        공고 상세 페이지 파싱 (비동기) + 스크린샷 저장
 
         Args:
             page: Playwright page 객체
             url: 공고 URL
             idx: 인덱스
+            screenshot_dir: 스크린샷 저장 디렉토리
 
         Returns:
             파싱된 공고 데이터 또는 None
         """
         try:
             logger.info(f"[{idx}] 공고 파싱 중: {url}")
+
+            # 페이지 이동 전 랜덤 슬립 (3-5초) - 블락 방지
+            await asyncio.sleep(random.uniform(3, 5))
+
             await page.goto(url, wait_until='domcontentloaded', timeout=self.get_timeout())
+
+            # Cloudflare Challenge 발생 시 대기 처리
+            try:
+                if await page.query_selector("div.cf-browser-verification"):
+                    logger.warning(f"[{idx}] Cloudflare 차단 감지, 8초 대기 중...")
+                    await page.wait_for_timeout(8000)
+            except:
+                pass
 
             # JavaScript 로드 대기
             await asyncio.sleep(self.get_wait_time())
+
+            # 페이지 이동 후 랜덤 슬립 (2-4초) - 더 자연스러운 패턴
+            await asyncio.sleep(random.uniform(2, 4))
 
             # 페이지 스크롤 (lazy-loading 콘텐츠 로드)
             await page.evaluate("() => window.scrollTo(0, document.documentElement.scrollHeight)")
@@ -254,6 +210,15 @@ class CoupangCrawler(BaseCrawler):
             # 섹션별 파싱 (content에서 구조화된 정보 추출)
             await self._parse_sections(page, job_data)
 
+            # 스크린샷 저장
+            if screenshot_dir:
+                screenshot_path = await self._save_screenshot(
+                    page, job_data, screenshot_dir, idx
+                )
+                if screenshot_path:
+                    job_data["screenshot_path"] = screenshot_path
+                    logger.info(f"[{idx}] 스크린샷 저장: {screenshot_path}")
+
             logger.info(f"[{idx}] 공고 파싱 완료: {job_data.get('title', 'Unknown')}")
             return job_data
 
@@ -339,11 +304,54 @@ class CoupangCrawler(BaseCrawler):
 
     def get_max_concurrent_jobs(self) -> int:
         """동시 처리 공고 수"""
-        return 5  # 전체 공고 크롤링을 위해 동시 처리 증가
+        return 1  # 쿠팡 차단 방지를 위해 순차 처리
 
     def get_timeout(self) -> int:
         """타임아웃 시간(밀리초)"""
         return 30000  # 페이지 로드 타임아웃 (30초)
+
+    async def _save_screenshot(
+        self, page: Any, job_data: Dict, screenshot_dir: str, idx: int
+    ) -> Optional[str]:
+        """
+        페이지 스크린샷 저장
+
+        Args:
+            page: Playwright page 객체
+            job_data: 공고 데이터
+            screenshot_dir: 저장 디렉토리
+            idx: 인덱스
+
+        Returns:
+            저장된 스크린샷 경로 또는 None
+        """
+        try:
+            # 저장 디렉토리 생성
+            os.makedirs(screenshot_dir, exist_ok=True)
+
+            # 파일명 생성 (job_id + 제목) - 특수문자 제거
+            job_id = job_data.get("job_id", f"job_{idx}")
+            title = job_data.get("title", "Unknown")
+            # Windows 파일명 특수문자 제거 (< > : " / \ | ? *)
+            safe_title = title.replace("/", "_").replace("\\", "_").replace(":", "_").replace("<", "_").replace(">", "_").replace("|", "_").replace("?", "_").replace("*", "_").replace("\"", "_")[:50]
+            filename = f"{job_id}_{safe_title}_screenshot.png"
+            filepath = os.path.join(screenshot_dir, filename)
+
+            # 전체 페이지 스크린샷 캡처 (더 큰 해상도)
+            screenshot_bytes = await page.screenshot(
+                full_page=True,
+                type="png"
+            )
+
+            # 파일 저장
+            with open(filepath, "wb") as f:
+                f.write(screenshot_bytes)
+
+            return filepath
+
+        except Exception as e:
+            logger.warning(f"[{idx}] 스크린샷 저장 실패: {e}")
+            return None
 
     def _normalize_url(self, href: str) -> str:
         """

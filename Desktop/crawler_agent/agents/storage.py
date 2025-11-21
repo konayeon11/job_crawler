@@ -9,11 +9,11 @@ logger = logging.getLogger(__name__)
 
 class StorageAgent:
     """
-    PDF 파일 저장을 담당하는 Agent
+    이미지 파일 저장을 담당하는 Agent
     로컬 저장소와 S3 저장소를 지원
     """
 
-    def __init__(self, local_base_path: str = "./data/pdfs", s3_config: Optional[dict] = None):
+    def __init__(self, local_base_path: str = "./data/screenshots", s3_config: Optional[dict] = None):
         """
         StorageAgent 초기화
 
@@ -187,6 +187,168 @@ class StorageAgent:
 
         if save_to_s3:
             s3_key = self.save_pdf_to_s3(pdf_bytes, company, job_id, job_title, subfolder)
+
+        success = local_path is not None or s3_key is not None
+
+        return {
+            "local_path": local_path,
+            "s3_key": s3_key,
+            "success": success
+        }
+
+    def save_image_locally(
+        self,
+        image_bytes: bytes,
+        company: str,
+        job_id: str,
+        job_title: str = "",
+        subfolder: str = "",
+        image_format: str = "png"
+    ) -> Optional[str]:
+        """
+        이미지를 로컬 저장소에 저장
+
+        Args:
+            image_bytes: 이미지 바이너리 데이터
+            company: 회사명
+            job_id: 공고 ID
+            job_title: 공고 제목 (파일명에 포함)
+            subfolder: 추가 서브폴더
+            image_format: 이미지 포맷 ('png' 또는 'jpeg')
+
+        Returns:
+            저장된 파일 경로 또는 None (실패 시)
+        """
+        try:
+            # 디렉토리 구조 생성: base_path/company/subfolder
+            company_path = self.local_base_path / company
+            if subfolder:
+                company_path = company_path / subfolder
+            company_path.mkdir(parents=True, exist_ok=True)
+
+            # 파일명 생성
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_title = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in job_title)[:30]
+            safe_title = safe_title.rstrip('_')
+
+            # 파일 확장자 결정
+            ext = "jpeg" if image_format.lower() == "jpeg" else "png"
+            filename = f"{job_id}_{safe_title}_{timestamp}.{ext}" if safe_title else f"{job_id}_{timestamp}.{ext}"
+            file_path = company_path / filename
+
+            # 이미지 저장
+            with open(file_path, "wb") as f:
+                f.write(image_bytes)
+
+            logger.info(f"Image saved locally: {file_path}")
+            return str(file_path)
+
+        except Exception as e:
+            logger.error(f"Failed to save image locally: {e}")
+            return None
+
+    def save_image_to_s3(
+        self,
+        image_bytes: bytes,
+        company: str,
+        job_id: str,
+        job_title: str = "",
+        subfolder: str = "",
+        image_format: str = "png"
+    ) -> Optional[str]:
+        """
+        이미지를 S3에 저장
+
+        Args:
+            image_bytes: 이미지 바이너리 데이터
+            company: 회사명
+            job_id: 공고 ID
+            job_title: 공고 제목
+            subfolder: 추가 서브폴더
+            image_format: 이미지 포맷 ('png' 또는 'jpeg')
+
+        Returns:
+            S3 객체 키 또는 None (실패 시)
+        """
+        if not self.s3_client:
+            logger.warning("S3 client not available. Skipping S3 storage.")
+            return None
+
+        try:
+            # S3 키 생성: company/subfolder/job_id_title_timestamp.ext
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_title = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in job_title)[:30]
+            safe_title = safe_title.rstrip('_')
+
+            # 파일 확장자 결정
+            ext = "jpeg" if image_format.lower() == "jpeg" else "png"
+            filename = f"{job_id}_{safe_title}_{timestamp}.{ext}" if safe_title else f"{job_id}_{timestamp}.{ext}"
+
+            s3_key = f"{company}"
+            if subfolder:
+                s3_key += f"/{subfolder}"
+            s3_key += f"/{filename}"
+
+            # Content-Type 결정
+            content_type = "image/jpeg" if image_format.lower() == "jpeg" else "image/png"
+
+            # S3에 업로드
+            bucket = self.s3_config.get("bucket")
+            self.s3_client.put_object(
+                Bucket=bucket,
+                Key=s3_key,
+                Body=image_bytes,
+                ContentType=content_type,
+                Metadata={
+                    "company": company,
+                    "job_id": job_id,
+                    "job_title": job_title,
+                    "timestamp": timestamp,
+                    "format": image_format,
+                }
+            )
+
+            logger.info(f"Image saved to S3: s3://{bucket}/{s3_key}")
+            return s3_key
+
+        except Exception as e:
+            logger.error(f"Failed to save image to S3: {e}")
+            return None
+
+    def save_image(
+        self,
+        image_bytes: bytes,
+        company: str,
+        job_id: str,
+        job_title: str = "",
+        subfolder: str = "",
+        image_format: str = "png",
+        save_to_s3: bool = False
+    ) -> dict:
+        """
+        이미지를 저장 (로컬 + S3 선택 가능)
+
+        Args:
+            image_bytes: 이미지 바이너리 데이터
+            company: 회사명
+            job_id: 공고 ID
+            job_title: 공고 제목
+            subfolder: 추가 서브폴더
+            image_format: 이미지 포맷 ('png' 또는 'jpeg')
+            save_to_s3: S3 저장 여부
+
+        Returns:
+            {
+                'local_path': '...' or None,
+                's3_key': '...' or None,
+                'success': True/False
+            }
+        """
+        local_path = self.save_image_locally(image_bytes, company, job_id, job_title, subfolder, image_format)
+        s3_key = None
+
+        if save_to_s3:
+            s3_key = self.save_image_to_s3(image_bytes, company, job_id, job_title, subfolder, image_format)
 
         success = local_path is not None or s3_key is not None
 
